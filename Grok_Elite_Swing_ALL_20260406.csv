@@ -1,0 +1,10 @@
+﻿Final_Rank,Rank,Ticker,CN_Name,Grok_Elite_Score,pullback_score,風險等級,Company_Name,Current_Price,Market_Cap_B,1M_Return_pct,RSI,Volume_Ratio,EMA20,SMA50,MACD_Hist,High_20,Gap_Risk,TrendStrength_pts,Score_Breakdown,Reason
+1,1,OXY,西方石油,78.0,16,低,OXY,62.79,62.1,18.5,64.3,0.11,60.35,53.02,-0.1938,67.45,低,5,基底+40 · PullbackQ+16 · RelStr+12 · TechConf+5 · TrendStrength+5,從20日高點回檔6.9%，守EMA20；1M報酬18.5%>SPY:-3.1%&QQQ:-3.1%；RSI64健康；站上SMA200（斜率上升）
+2,2,MPC,MPC,78.0,16,低,MPC,238.97,70.5,9.94,59.0,0.04,234.21,211.39,-1.2941,255.77,低,5,基底+40 · PullbackQ+16 · RelStr+12 · TechConf+5 · TrendStrength+5,從20日高點回檔6.6%，守EMA20；1M報酬9.9%>SPY:-3.1%&QQQ:-3.1%；RSI59健康；站上SMA200（斜率上升）
+3,3,EOG,EOG資源,78.0,16,低,EOG,142.73,76.6,8.93,62.1,0.05,139.25,126.78,-0.6039,151.87,低,5,基底+40 · PullbackQ+16 · RelStr+12 · TechConf+5 · TrendStrength+5,從20日高點回檔6.0%，守EMA20；1M報酬8.9%>SPY:-3.1%&QQQ:-3.1%；RSI62健康；站上SMA200（斜率上升）
+4,4,FANG,鑽石背能源,78.0,16,低,FANG,194.1,54.8,8.41,60.0,0.04,190.23,176.58,-0.7736,204.91,低,5,基底+40 · PullbackQ+16 · RelStr+12 · TechConf+5 · TrendStrength+5,從20日高點回檔5.3%，守EMA20；1M報酬8.4%>SPY:-3.1%&QQQ:-3.1%；RSI60健康；站上SMA200（斜率上升）
+5,5,AA,AA,76.0,9,低,AA,70.09,18.5,16.27,62.9,0.1,63.71,61.5,1.2513,72.24,低,5,基底+40 · PullbackQ+9 · RelStr+12 · TechConf+10 · TrendStrength+5,從20日高點回檔3.0%，守EMA20；1M報酬16.3%>SPY:-3.1%&QQQ:-3.1%；RSI63健康，MACD多頭；站上SMA200（斜率上升）
+6,6,MRVL,美滿電子,71.0,9,低,MRVL,107.81,94.0,42.46,68.0,0.26,94.75,85.44,1.5209,111.89,低,5,基底+40 · PullbackQ+9 · RelStr+12 · TechConf+5 · TrendStrength+5,從20日高點回檔3.6%，守EMA20；1M報酬42.5%>SPY:-3.1%&QQQ:-3.1%；MACD多頭；站上SMA200（斜率上升）
+7,7,INTC,英特爾,67.0,0,中,INTC,51.62,259.2,12.33,62.6,0.26,46.07,46.11,0.7253,52.38,低,5,基底+40 · RelStr+12 · TechConf+10 · TrendStrength+5,1M報酬12.3%>SPY:-3.1%&QQQ:-3.1%；RSI63健康，MACD金叉多頭；站上SMA200（斜率上升）
+8,8,AMD,超微半導體,67.0,0,中,AMD,222.85,362.8,11.73,60.3,0.26,206.8,211.02,2.4878,226.31,低,5,基底+40 · RelStr+12 · TechConf+10 · TrendStrength+5,1M報酬11.7%>SPY:-3.1%&QQQ:-3.1%；RSI60健康，MACD多頭；站上SMA200（斜率上升）
+9,9,COP,康菲石油,66.0,9,中,COP,130.11,158.9,11.38,65.2,0.04,126.15,115.35,-0.3378,135.87,低,5,基底+40 · PullbackQ+9 · RelStr+12 · TrendStrength+5,從20日高點回檔4.2%，守EMA20；1M報酬11.4%>SPY:-3.1%&QQQ:-3.1%；站上SMA200（斜率上升）
