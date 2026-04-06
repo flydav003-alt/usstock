@@ -1371,7 +1371,7 @@ def build_telegram_message(top10_df, today_str, macro):
             f"   {bd}"
         )
     lines.append("─" * 30)
-    gh_pages_url = os.environ.get('GITHUB_PAGES_URL', '')
+    gh_pages_url = os.environ.get('PAGES_URL', '')
     if gh_pages_url:
         lines.append(f"🔗 [完整報告]({gh_pages_url})")
     lines.append("_本訊息由 GitHub Actions 自動發送_")
@@ -1501,7 +1501,7 @@ def send_email(subject, html_body, attachments=None):
 
 # ── 執行發送 ───────────────────────────────────────────────────
 if records:
-    gh_pages_url = os.environ.get('GITHUB_PAGES_URL', '')
+    gh_pages_url = os.environ.get('PAGES_URL', '')
 
     # Telegram
     tg_msg = build_telegram_message(top10, TODAY_STR, MACRO)
