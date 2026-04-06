@@ -1,0 +1,65 @@
+name: Grok Elite Swing — 每日自動選股
+
+on:
+  schedule:
+    # 台灣時間每天 13:00 = UTC 05:00
+    # 週二到週六執行（對應週一到週五美股收盤資料）
+    - cron: '0 5 * * 2-6'
+  workflow_dispatch:   # 允許手動點按鈕觸發（測試用）
+
+jobs:
+  run-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # 最多跑 30 分鐘，超過自動停止
+
+    steps:
+      # ① 把你的程式碼下載到執行環境
+      - name: 下載程式碼
+        uses: actions/checkout@v4
+
+      # ② 安裝 Python
+      - name: 安裝 Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # ③ 安裝需要的套件
+      - name: 安裝套件
+        run: |
+          pip install yfinance pandas "pandas_ta==0.3.14b" numpy requests plotly --prefer-binary
+
+      # ④ 執行主程式
+      - name: 執行 Grok Elite Swing 選股
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_RECIPIENTS:   ${{ secrets.EMAIL_RECIPIENTS }}
+          PAGES_URL:          ${{ secrets.PAGES_URL }}
+        run: python grok_elite_swing.py
+
+      # ⑤ 把 HTML 報告複製成 index.html，推上 GitHub Pages
+      - name: 更新 GitHub Pages 報告
+        run: |
+          HTML_FILE=$(ls Grok_Elite_Swing_Report_*.html 2>/dev/null | head -1)
+          if [ -n "$HTML_FILE" ]; then
+            mkdir -p docs
+            cp "$HTML_FILE" docs/index.html
+            echo "✅ 已複製 $HTML_FILE → docs/index.html"
+          else
+            echo "⚠️ 找不到 HTML 報告"
+          fi
+
+      # ⑥ 把 CSV 和 HTML 報告 commit 回 GitHub 留存紀錄
+      - name: 儲存報告到 GitHub
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html || true
+          git add Grok_Elite_Swing_*.csv || true
+          git add Grok_Elite_Swing_*.html || true
+          git diff --staged --quiet || git commit -m "📊 每日報告更新 $(date '+%Y-%m-%d')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
