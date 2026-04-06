@@ -893,9 +893,10 @@ def rank_icon(r):
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def risk_label(score):
-    if score >= 70:   return '低',   '#30D158'
-    elif score >= 55: return '中',   '#FF9F0A'
-    else:             return '高',   '#FF453A'
+    if score >= 80:   return '低',     '#30D158'   # 80+ 低風險
+    elif score >= 65: return '中',     '#D4832A'   # 65-79 中風險
+    elif score >= 55: return '中高',   '#FF6B35'   # 55-64 中高風險
+    else:             return '高',     '#FF453A'   # <55 高風險
 
 def generate_html_report(top10_df, all_df, pdata, today_str, macro=None):
     if macro is None: macro = MACRO
