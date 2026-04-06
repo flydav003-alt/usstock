@@ -1,0 +1,56 @@
+name: Grok Elite Swing
+
+on:
+  schedule:
+    - cron: '0 5 * * 2-6'
+  workflow_dispatch:
+
+jobs:
+  run-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install packages
+        run: |
+          pip install --upgrade pip
+          pip install yfinance pandas numpy requests plotly
+          pip install git+https://github.com/twopirllc/pandas-ta.git@development
+
+      - name: Run scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+          GMAIL_USER:         ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_RECIPIENTS:   ${{ secrets.EMAIL_RECIPIENTS }}
+          PAGES_URL:          ${{ secrets.PAGES_URL }}
+        run: python grok_elite_swing.py
+
+      - name: Update GitHub Pages
+        run: |
+          HTML_FILE=$(ls Grok_Elite_Swing_Report_*.html 2>/dev/null | head -1)
+          if [ -n "$HTML_FILE" ]; then
+            mkdir -p docs
+            cp "$HTML_FILE" docs/index.html
+          fi
+
+      - name: Commit reports
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html || true
+          git add Grok_Elite_Swing_*.csv || true
+          git add Grok_Elite_Swing_*.html || true
+          git diff --staged --quiet || git commit -m "Daily report $(date '+%Y-%m-%d')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
