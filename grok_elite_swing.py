@@ -203,7 +203,7 @@ def download_batch(tickers, period=PERIOD, interval=INTERVAL):
             interval  = interval,
             auto_adjust = True,
             progress  = False,
-            threads   = True
+            threads   = False
         )
         if raw.empty:
             return result
