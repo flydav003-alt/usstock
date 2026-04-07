@@ -325,6 +325,50 @@ def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hi
     return int(new_score), breakdown, cb, pq, vs, rs, tc, bonus
 
 
+
+def _build_reason(high_20, latest_close, ema20, ret_1m,
+                  spy_ret, qqq_ret, rsi14, macd_hist, sma200):
+    parts = []
+
+    # 1. 回檔幅度
+    if not (math.isnan(high_20) or math.isnan(latest_close)) and high_20 > 0:
+        pullback = (high_20 - latest_close) / high_20 * 100
+        parts.append(f'從20日高點回檔{pullback:.1f}%')
+
+    # 2. EMA20 守住
+    if not (math.isnan(latest_close) or math.isnan(ema20)):
+        if latest_close > ema20:
+            parts.append('守EMA20')
+
+    # 3. 1M報酬
+    if not math.isnan(ret_1m):
+        parts.append(f'1M報酬{ret_1m*100:.1f}%')
+
+    # 4. SPY / QQQ 基準對比
+    spy_str = f'SPY:{spy_ret*100:+.1f}%' if not math.isnan(spy_ret) else 'SPY:N/A'
+    qqq_str = f'QQQ:{qqq_ret*100:+.1f}%' if not math.isnan(qqq_ret) else 'QQQ:N/A'
+    parts.append(f'{spy_str}&{qqq_str}')
+
+    # 5. RSI 健康度
+    if not math.isnan(rsi14):
+        parts.append(f'RSI{rsi14:.0f}健康')
+
+    # 6. MACD 狀態
+    if not math.isnan(macd_hist):
+        if macd_hist > 0:
+            parts.append('MACD金叉多頭')
+        elif macd_hist > -0.1:
+            parts.append('MACD多頭')
+        else:
+            parts.append('MACD待確認')
+
+    # 7. SMA200 站上（斜率）
+    if not math.isnan(sma200) and latest_close > sma200:
+        parts.append('站上SMA200（斜率上升）')
+
+    return '；'.join(parts)
+
+
 def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
     try:
         if df is None or len(df) < 60:
@@ -411,7 +455,10 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
             'MACD_Hist'            : round(macd_hist, 4),
             'High_20'              : round(high_20, 2) if not np.isnan(high_20) else np.nan,
             'Score_Breakdown'      : new_bd,
-            'Reason'               : '通過硬濾鏡',
+            'Reason'               : _build_reason(
+                                        high_20, latest_close, ema20, ret_1m,
+                                        spy_ret, qqq_ret, rsi14, macd_hist, sma200
+                                    ),
             'Gap_Risk'             : gap_risk,
             'CB_score'             : cb_s,
             'PullbackQ_score'      : pq_s,
