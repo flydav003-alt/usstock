@@ -7,7 +7,7 @@ Grok Elite Swing v5.0
 輸出：Top10 CSV / ALL CSV / HTML 精美報告（含 Plotly K 線圖）
 
 依賴套件（pip install）：
-    yfinance pandas pandas_ta numpy requests plotly
+    yfinance pandas ta numpy requests plotly
 """
 
 # ════════════════════════════════════════════════════════════════
@@ -23,7 +23,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+import ta as _ta
 import plotly.graph_objects as go
 import plotly.io as pio
 import requests
@@ -341,16 +341,16 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         latest_close = float(close.iloc[-1])
         latest_vol   = float(volume.iloc[-1])
 
-        ema20 = float(ta.ema(close, length=20).iloc[-1])
-        sma50 = float(ta.sma(close, length=50).iloc[-1])
-        rsi14 = float(ta.rsi(close, length=14).iloc[-1])
+        ema20 = float(_ta.trend.EMAIndicator(close, window=20).ema_indicator().iloc[-1])
+        sma50 = float(_ta.trend.SMAIndicator(close, window=50).sma_indicator().iloc[-1])
+        rsi14 = float(_ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1])
 
-        sma200_series = ta.sma(close, length=200)
+        sma200_series = _ta.trend.SMAIndicator(close, window=200).sma_indicator()
         sma200_vals   = sma200_series.dropna()
         sma200 = float(sma200_series.iloc[-1]) if len(sma200_vals) >= 10 else float('nan')  # noqa
 
-        macd_df   = ta.macd(close, fast=12, slow=26, signal=9)
-        macd_hist = float(macd_df['MACDh_12_26_9'].iloc[-1])
+        _macd_obj = _ta.trend.MACD(close, window_fast=12, window_slow=26, window_sign=9)
+        macd_hist = float(_macd_obj.macd_diff().iloc[-1])
 
         avg_vol_20 = float(volume.iloc[-20:].mean()) if len(volume) >= 20 else float('nan')
         vol_ratio  = latest_vol / avg_vol_20 if avg_vol_20 > 0 else float('nan')
@@ -610,13 +610,13 @@ def create_kline_plotly(ticker, df_raw, rank, score, cn_name, signal_text=''):
         n     = min(80, len(df))
         d     = df.iloc[-n:].copy()
         cl    = df['Close']
-        ema20 = ta.ema(cl, length=20).iloc[-n:]
-        sma50 = ta.sma(cl, length=50).iloc[-n:]
-        rsi14 = ta.rsi(cl, length=14).iloc[-n:]
-        macd_r = ta.macd(cl, fast=12, slow=26, signal=9)
-        m_l   = macd_r['MACD_12_26_9'].iloc[-n:]
-        m_s   = macd_r['MACDs_12_26_9'].iloc[-n:]
-        m_h   = macd_r['MACDh_12_26_9'].iloc[-n:]
+        ema20 = _ta.trend.EMAIndicator(cl, window=20).ema_indicator().iloc[-n:]
+        sma50 = _ta.trend.SMAIndicator(cl, window=50).sma_indicator().iloc[-n:]
+        rsi14 = _ta.momentum.RSIIndicator(cl, window=14).rsi().iloc[-n:]
+        _macd_kline = _ta.trend.MACD(cl, window_fast=12, window_slow=26, window_sign=9)
+        m_l   = _macd_kline.macd().iloc[-n:]
+        m_s   = _macd_kline.macd_signal().iloc[-n:]
+        m_h   = _macd_kline.macd_diff().iloc[-n:]
         dates = d.index.strftime('%Y-%m-%d').tolist()
         v_col = ['#30D158' if float(c) >= float(o) else '#FF453A'
                  for c, o in zip(d['Close'], d['Open'])]
