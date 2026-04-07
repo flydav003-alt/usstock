@@ -1,48 +1,34 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Grok Elite Swing v3.2
+"""
+Grok Elite Swing v5.0
+美股波段選股模型 — S&P 500 + Nasdaq 100
+執行方式：python grok_elite_swing.py
+輸出：Top10 CSV / ALL CSV / HTML 精美報告（含 Plotly K 線圖）
 
-# === code-imports ===
-import pandas as pd
-import numpy as np
-import yfinance as yf
-# ── 自製技術指標（取代 pandas_ta）────────────────────────────────
-import pandas as _pd_ta
+依賴套件（pip install）：
+    yfinance pandas pandas_ta numpy requests plotly
+"""
 
-class _TA:
-    @staticmethod
-    def ema(series, length=20):
-        return series.ewm(span=length, adjust=False).mean()
-    @staticmethod
-    def sma(series, length=20):
-        return series.rolling(window=length).mean()
-    @staticmethod
-    def rsi(series, length=14):
-        delta    = series.diff()
-        gain     = delta.clip(lower=0)
-        loss     = -delta.clip(upper=0)
-        avg_gain = gain.ewm(alpha=1/length, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/length, adjust=False).mean()
-        rs       = avg_gain / avg_loss.replace(0, float('nan'))
-        return 100 - (100 / (1 + rs))
-    @staticmethod
-    def macd(series, fast=12, slow=26, signal=9):
-        ema_fast    = series.ewm(span=fast,   adjust=False).mean()
-        ema_slow    = series.ewm(span=slow,   adjust=False).mean()
-        macd_line   = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        histogram   = macd_line - signal_line
-        return _pd_ta.DataFrame({
-            f'MACD_{fast}_{slow}_{signal}'  : macd_line,
-            f'MACDh_{fast}_{slow}_{signal}' : histogram,
-            f'MACDs_{fast}_{slow}_{signal}' : signal_line,
-        })
-
-ta = _TA()
-
-import requests
-import warnings
+# ════════════════════════════════════════════════════════════════
+# ① 套件匯入
+# ════════════════════════════════════════════════════════════════
+import io
+import json
+import math
+import os
 import time
-from datetime import datetime, timedelta
+import warnings
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import pandas_ta as ta
+import plotly.graph_objects as go
+import plotly.io as pio
+import requests
+import yfinance as yf
+from plotly.subplots import make_subplots
 
 warnings.filterwarnings('ignore')
 pd.set_option('display.max_columns', None)
@@ -51,10 +37,10 @@ pd.set_option('display.float_format', '{:.2f}'.format)
 TODAY = datetime.today().strftime('%Y%m%d')
 print(f'✅ 套件載入完成 | 執行日期：{TODAY}')
 
-# === code-tickers ===
-import io
 
-# ── Wikipedia 請求 Headers（模擬真實瀏覽器，避免 403）────────────
+# ════════════════════════════════════════════════════════════════
+# ② 抓取 S&P 500 + Nasdaq 100 成分股清單
+# ════════════════════════════════════════════════════════════════
 WIKI_HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -67,19 +53,16 @@ WIKI_HEADERS = {
 
 
 def fetch_wiki_tables(url):
-    """用 requests 帶完整 header 抓 Wikipedia HTML，再用 pd.read_html 解析"""
     resp = requests.get(url, headers=WIKI_HEADERS, timeout=20)
     resp.raise_for_status()
     return pd.read_html(io.StringIO(resp.text))
 
 
 def get_sp500_tickers():
-    """從 Wikipedia 抓取 S&P 500 成分股"""
     try:
         url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
         tables = fetch_wiki_tables(url)
         df = tables[0]
-        # 尋找 Symbol 欄位（相容各種欄位命名）
         col = next(
             (c for c in df.columns if 'symbol' in c.lower() or 'ticker' in c.lower()),
             df.columns[0]
@@ -88,7 +71,7 @@ def get_sp500_tickers():
             df[col].dropna()
             .astype(str)
             .str.strip()
-            .str.replace(r'\.B$', '-B', regex=True)  # BRK.B → BRK-B
+            .str.replace(r'\.B$', '-B', regex=True)
             .tolist()
         )
         print(f'✅ S&P 500：抓到 {len(tickers)} 檔')
@@ -99,7 +82,6 @@ def get_sp500_tickers():
 
 
 def get_nasdaq100_tickers():
-    """從 Wikipedia 抓取 Nasdaq-100 成分股"""
     try:
         url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
         tables = fetch_wiki_tables(url)
@@ -127,169 +109,223 @@ def get_nasdaq100_tickers():
         return []
 
 
-# ── 完整內建備用清單（Wikipedia 萬一失敗時使用）─────────────────
-# 涵蓋 S&P 500 + Nasdaq 100 核心成分，共約 550 檔
-BUILTIN_TICKERS = [
+# 完整內建備用清單（Wikipedia 萬一失敗時使用）
+BUILTIN_TICKERS = list(set([
     # Mega-cap / Nasdaq 100 核心
     'AAPL','MSFT','NVDA','AMZN','META','GOOGL','GOOG','TSLA','AVGO','COST',
     'NFLX','AMD','ADBE','CSCO','INTC','CMCSA','AMGN','TXN','QCOM','INTU',
     'AMAT','ISRG','BKNG','MU','REGN','ADI','PANW','LRCX','KLAC','CDNS',
     'SNPS','ASML','MELI','ABNB','DXCM','IDXX','MRNA','BIIB','VRTX','FAST',
     'ROST','PAYX','AEP','CPRT','ODFL','KHC','DLTR','HON','ON','FANG',
-    'FTNT','GEHC','GFS','ILMN','KDP','LCID','MDLZ','MNST','MRVL','NXPI',
-    'ORLY','PCAR','PDD','PYPL','SBUX','SGEN','TEAM','TTD','VRSK','WDAY',
+    'FTNT','GEHC','GFS','ILMN','KDP','MDLZ','MNST','MRVL','NXPI',
+    'ORLY','PCAR','PYPL','SBUX','SGEN','TEAM','TTD','VRSK','WDAY',
     'XEL','ZM','ZS','CEG','CSGP','DDOG','EA','EXC','FSLR','GILD',
-    'ANSS','CHTR','CTSH','ENPH','TTWO','WBA','ALGN','AZN','BKR','CCEP',
-    # S&P 500 各板塊代表
+    'ANSS','CHTR','CTSH','ENPH','TTWO','ALGN','AZN','BKR','CCEP',
+    # 金融
     'JPM','BAC','WFC','GS','MS','C','USB','PNC','TFC','COF',
     'AXP','BLK','SCHW','CB','MMC','AON','MET','PRU','AFL','AIG',
+    'SPGI','MCO','ICE','CME','CBOE','MSCI','FIS','FI','BR',
+    # 醫療
     'JNJ','UNH','PFE','ABBV','MRK','LLY','TMO','DHR','ABT','BMY',
-    'MDT','SYK','ELV','CVS','CI','HUM','CNC','MOH','DGX','LH',
+    'MDT','SYK','ELV','CVS','CI','HUM','CNC','DGX','LH',
+    # 能源
     'XOM','CVX','COP','EOG','SLB','OXY','PSX','VLO','MPC','HES',
-    'NEE','DUK','SO','D','EXC','AEP','SRE','PCG','XEL','ED',
-    'AAPL','MSFT','NVDA','AVGO','ORCL','IBM','AMAT','MU','QCOM','TXN',
-    'ACN','CRM','SAP','NOW','SNOW','PLTR','UBER','LYFT','ABNB','DASH',
-    'AMZN','WMT','COST','TGT','HD','LOW','TJX','ROST','DLTR','DG',
-    'MCD','SBUX','YUM','QSR','DPZ','DENN','TXRH','SHAK','JACK','WEN',
-    'PG','KO','PEP','PM','MO','MDLZ','CL','CHD','KMB','GIS',
-    'DIS','CMCSA','NFLX','WBD','FOX','FOXA','PARA','SIRI','LYV','IMAX',
-    'BA','RTX','LMT','NOC','GD','L3H','HII','TDG','HEI','TXT',
-    'CAT','DE','EMR','ETN','ITW','PH','GE','MMM','ROK','AME',
-    'UPS','FDX','CSX','UNP','NSC','CP','CNI','JBHT','XPO','SAIA',
-    'TSLA','GM','F','RIVN','LCID','STLA','TM','HMC','RACE','HOG',
-    'LIN','APD','ECL','SHW','PPG','NEM','FCX','AA','MP','ALB',
-    'AMT','PLD','EQIX','CCI','DLR','PSA','EXR','WELL','VTR','O',
-    'V','MA','PYPL','SQ','AFRM','SOFI','NU','HOOD','COIN','MSTR',
-    'SPGI','MCO','ICE','CME','CBOE','MSCI','FDS','BR','FIS','FI',
-    'DHI','LEN','PHM','TOL','NVR','MDC','MHO','KBH','BZH','CCS',
-]
-BUILTIN_TICKERS = list(set(BUILTIN_TICKERS))  # 去重
+    # 公用事業
+    'NEE','DUK','SO','D','AEP','SRE','PCG','ED',
+    # 科技
+    'ORCL','IBM','CRM','SAP','ACN','NOW','SNOW','PLTR','UBER','DASH',
+    # 消費
+    'WMT','TGT','HD','LOW','TJX','DG','MCD','YUM','PG','KO','PEP',
+    'PM','MO','DIS','BA','RTX','LMT','NOC','GD',
+    'CAT','DE','EMR','ETN','ITW','GE','HON','UPS','FDX','CSX','UNP',
+    'TSLA','GM','F','RIVN',
+    # 原物料 / 房地產
+    'LIN','APD','NEM','FCX','ALB',
+    'AMT','PLD','EQIX','CCI','DLR','PSA',
+    # 金融科技
+    'V','MA','SQ','AFRM','SOFI','NU','HOOD','COIN','MSTR',
+    # 建商
+    'DHI','LEN','PHM',
+]))
 
 
-# ── 執行抓取 ────────────────────────────────────────────────────
-sp500_tickers  = get_sp500_tickers()
-ndx100_tickers = get_nasdaq100_tickers()
+def build_ticker_list():
+    sp500  = get_sp500_tickers()
+    ndx100 = get_nasdaq100_tickers()
+    combined = list(set(sp500 + ndx100))
+    if len(combined) < 100:
+        print(f'⚠️ Wikipedia 僅抓到 {len(combined)} 檔，補充內建清單...')
+        combined = list(set(combined + BUILTIN_TICKERS))
+    all_tickers = sorted(set(
+        t for t in combined
+        if isinstance(t, str)
+        and 1 <= len(t) <= 6
+        and t not in ('', 'nan', 'NaN')
+        and not t.startswith('.')
+    ))
+    print(f'\n📊 合計股票池：{len(all_tickers)} 檔（去重後）')
+    return all_tickers
 
-# 合併：Wikipedia 成功就用 Wikipedia，失敗就補內建
-combined = list(set(sp500_tickers + ndx100_tickers))
-if len(combined) < 100:
-    print(f'⚠️ Wikipedia 僅抓到 {len(combined)} 檔，補充內建清單...')
-    combined = list(set(combined + BUILTIN_TICKERS))
 
-# 清洗：去除無效符號
-all_tickers = [
-    t for t in combined
-    if isinstance(t, str)
-    and 1 <= len(t) <= 6
-    and t not in ('', 'nan', 'NaN')
-    and not t.startswith('.')
-]
-all_tickers = sorted(set(all_tickers))
-
-print(f'\n📊 合計股票池：{len(all_tickers)} 檔（去重後）')
-
-# === code-download ===
+# ════════════════════════════════════════════════════════════════
+# ③ 下載歷史價格資料
+# ════════════════════════════════════════════════════════════════
 BATCH_SIZE = 100
 PERIOD     = '1y'
 INTERVAL   = '1d'
 
+
 def download_batch(tickers, period=PERIOD, interval=INTERVAL):
-    """下載一批 ticker 的歷史資料，回傳 dict {ticker: DataFrame}"""
     result = {}
     try:
         raw = yf.download(
-            tickers   = tickers,
-            period    = period,
-            interval  = interval,
+            tickers     = tickers,
+            period      = period,
+            interval    = interval,
+            group_by    = 'ticker',
             auto_adjust = True,
-            progress  = False,
-            threads   = False
+            progress    = False,
+            threads     = True
         )
-        if raw.empty:
-            return result
-        # 新版 yfinance 回傳 MultiIndex columns (field, ticker)
-        if isinstance(raw.columns, pd.MultiIndex):
-            if len(tickers) == 1:
-                t = tickers[0]
-                # 降一層，只保留 field 欄位
-                df = raw.droplevel(1, axis=1).dropna(how='all')
-                if len(df) >= 60:
-                    result[t] = df
-            else:
-                for t in tickers:
-                    try:
-                        df = raw.xs(t, axis=1, level=1).dropna(how='all')
-                        if len(df) >= 60:
-                            result[t] = df
-                    except Exception:
-                        pass
+        if len(tickers) == 1:
+            t = tickers[0]
+            if not raw.empty:
+                result[t] = raw
         else:
-            # 舊版或單股票 flat columns
-            if len(tickers) == 1:
-                t = tickers[0]
-                if not raw.empty:
-                    result[t] = raw
-            else:
-                for t in tickers:
-                    try:
-                        df = raw[t].dropna(how='all')
-                        if len(df) >= 60:
-                            result[t] = df
-                    except Exception:
-                        pass
+            for t in tickers:
+                try:
+                    df = raw[t].dropna(how='all')
+                    if len(df) >= 60:
+                        result[t] = df
+                except Exception:
+                    pass
     except Exception as e:
         print(f'  ⚠️ 批次下載錯誤：{e}')
     return result
 
 
-# 下載基準指數
-print('📥 下載 SPY / QQQ 基準...')
-benchmark_data = download_batch(['SPY', 'QQQ'])
-spy_ret_1m = float('nan')
-qqq_ret_1m = float('nan')
+def download_all(all_tickers):
+    print('📥 下載 SPY / QQQ 基準...')
+    benchmark_data = download_batch(['SPY', 'QQQ'])
+    spy_ret_1m = float('nan')
+    qqq_ret_1m = float('nan')
 
-if 'SPY' in benchmark_data and len(benchmark_data['SPY']) >= 22:
-    spy_close  = benchmark_data['SPY']['Close']
-    spy_ret_1m = (spy_close.iloc[-1] - spy_close.iloc[-22]) / spy_close.iloc[-22]
-    print(f'  SPY 近 1 個月報酬：{spy_ret_1m:.2%}')
+    if 'SPY' in benchmark_data and len(benchmark_data['SPY']) >= 22:
+        spy_close  = benchmark_data['SPY']['Close']
+        spy_ret_1m = (spy_close.iloc[-1] - spy_close.iloc[-22]) / spy_close.iloc[-22]
+        print(f'  SPY 近 1 個月報酬：{spy_ret_1m:.2%}')
 
-if 'QQQ' in benchmark_data and len(benchmark_data['QQQ']) >= 22:
-    qqq_close  = benchmark_data['QQQ']['Close']
-    qqq_ret_1m = (qqq_close.iloc[-1] - qqq_close.iloc[-22]) / qqq_close.iloc[-22]
-    print(f'  QQQ 近 1 個月報酬：{qqq_ret_1m:.2%}')
+    if 'QQQ' in benchmark_data and len(benchmark_data['QQQ']) >= 22:
+        qqq_close  = benchmark_data['QQQ']['Close']
+        qqq_ret_1m = (qqq_close.iloc[-1] - qqq_close.iloc[-22]) / qqq_close.iloc[-22]
+        print(f'  QQQ 近 1 個月報酬：{qqq_ret_1m:.2%}')
 
-# 分批下載所有股票
-print(f'\n📥 開始分批下載 {len(all_tickers)} 檔股票（每批 {BATCH_SIZE} 檔）...')
-price_data = {}
-batches    = [all_tickers[i:i+BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
+    print(f'\n📥 開始分批下載 {len(all_tickers)} 檔股票（每批 {BATCH_SIZE} 檔）...')
+    price_data = {}
+    batches    = [all_tickers[i:i+BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
 
-for idx, batch in enumerate(batches):
-    print(f'  批次 {idx+1}/{len(batches)}：下載 {len(batch)} 檔...', end=' ')
-    batch_result = download_batch(batch)
-    price_data.update(batch_result)
-    print(f'成功 {len(batch_result)} 檔')
-    if idx < len(batches) - 1:
-        time.sleep(1.5)
+    for idx, batch in enumerate(batches):
+        print(f'  批次 {idx+1}/{len(batches)}：下載 {len(batch)} 檔...', end=' ', flush=True)
+        batch_result = download_batch(batch)
+        price_data.update(batch_result)
+        print(f'成功 {len(batch_result)} 檔')
+        if idx < len(batches) - 1:
+            time.sleep(1.5)
 
-print(f'\n✅ 資料下載完成：共 {len(price_data)} 檔有效資料')
+    print(f'\n✅ 資料下載完成：共 {len(price_data)} 檔有效資料')
+    return price_data, spy_ret_1m, qqq_ret_1m
 
-# === code-scoring ===
-# Grok Elite Swing v3.2 - 最終版 | PullbackQ 四區間精準判斷 + tiebreaker 排序
 
-# ────────────────────────────────────────────────────────────────
-# 硬濾鏡門檻
-# ────────────────────────────────────────────────────────────────
-MIN_MARKET_CAP  = 10_000_000_000
-MIN_PRICE       = 10.0
-MIN_AVG_VOL     = 1_000_000
-MIN_1M_RETURN   = 0.08
+# ════════════════════════════════════════════════════════════════
+# ④ 計算技術指標 & Grok Elite Score v5.0
+# ════════════════════════════════════════════════════════════════
+MIN_MARKET_CAP = 10_000_000_000
+MIN_PRICE      = 10.0
+MIN_AVG_VOL    = 1_000_000
+MIN_1M_RETURN  = 0.08
+
+
+def _nan(v):
+    try:
+        return math.isnan(float(v))
+    except Exception:
+        return True
+
+
+def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist):
+    """
+    v5.0 技術細化評分
+    回傳: (new_score, breakdown, cb, pq, vs, rs, tc, bonus)
+    """
+    pullback_pct = float('nan')
+    if (not _nan(high_20)) and float(high_20) > 0:
+        pullback_pct = (float(high_20) - float(latest_close)) / float(high_20) * 100
+
+    above_ema20 = (
+        (not _nan(latest_close)) and
+        (not _nan(ema20)) and
+        (float(latest_close) > float(ema20))
+    )
+
+    # ── 1. Consolidation Breakout (最高 +18) ────────────────────
+    cb = 0
+    if above_ema20 and (not _nan(vol_ratio)) and (not _nan(pullback_pct)):
+        vr = float(vol_ratio)
+        pb = float(pullback_pct)
+        if   vr >= 2.0 and pb <= 8:   cb = 18
+        elif vr >= 1.5 and pb <= 12:  cb = 12
+        elif vr >= 1.2 and pb <= 15:  cb = 8
+        elif vr >= 1.0 and pb <= 15:  cb = 4
+
+    # ── 2. Pullback Quality (最高 +15) ──────────────────────────
+    pq = 0
+    if above_ema20 and (not _nan(pullback_pct)):
+        pb = float(pullback_pct)
+        if   5  <= pb <= 10: pq = 15
+        elif 10 <  pb <= 15: pq = 10
+        elif pb > 15:        pq = 5
+
+    # ── 3. Volume Surge (最高 +12) ──────────────────────────────
+    vs = 0
+    if not _nan(vol_ratio):
+        vr = float(vol_ratio)
+        if   vr >= 2.0:         vs = 12
+        elif 1.5 <= vr <= 1.99: vs = 8
+        elif 1.2 <= vr <= 1.49: vs = 4
+
+    # ── 4. Relative Strength (固定 +8) ──────────────────────────
+    rs = 8
+
+    # ── 5. Technical Confirmation (最高 +10) ────────────────────
+    tc = 0
+    if (not _nan(rsi14)) and (not _nan(macd_hist)):
+        r  = float(rsi14)
+        mh = float(macd_hist)
+        rsi_main = 40 <= r <= 65
+        rsi_edge = (38 <= r < 40) or (65 < r <= 68)
+        macd_pos  = mh > 0
+        macd_flat = -0.1 <= mh <= 0
+        macd_near = abs(mh) < 0.05
+
+        if   rsi_main and macd_pos:   tc = 10
+        elif rsi_main and macd_flat:  tc = 6
+        elif rsi_edge or macd_near:   tc = 3
+
+        if r > 70 or r < 40:
+            tc = 0
+
+    # ── 6. Bonus (+5 當 CB >= 12 且 PQ >= 10) ───────────────────
+    bonus = 5 if (cb >= 12 and pq >= 10) else 0
+
+    new_score = min(40 + cb + pq + vs + rs + tc + bonus, 100)
+    breakdown = (
+        f'基底+40 · CB+{cb} · PullbackQ+{pq} · '
+        f'VS+{vs} · RS+{rs} · TC+{tc} · Bonus+{bonus}'
+    )
+    return int(new_score), breakdown, cb, pq, vs, rs, tc, bonus
 
 
 def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
-    # ╔══════════════════════════════════════════════════════════╗
-    # ║  Grok Elite Swing v3.2 — 單一評分來源                   ║
-    # ║  PullbackQ 四區間精準判斷 + tiebreaker 排序              ║
-    # ╚══════════════════════════════════════════════════════════╝
     try:
         if df is None or len(df) < 60:
             return None
@@ -305,32 +341,16 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         latest_close = float(close.iloc[-1])
         latest_vol   = float(volume.iloc[-1])
 
-        ema20  = float(ta.ema(close, length=20).iloc[-1])
-        sma50  = float(ta.sma(close, length=50).iloc[-1])
-        rsi14  = float(ta.rsi(close, length=14).iloc[-1])
+        ema20 = float(ta.ema(close, length=20).iloc[-1])
+        sma50 = float(ta.sma(close, length=50).iloc[-1])
+        rsi14 = float(ta.rsi(close, length=14).iloc[-1])
 
-        # SMA200（Trend Strength 用）
         sma200_series = ta.sma(close, length=200)
         sma200_vals   = sma200_series.dropna()
-        sma200        = float(sma200_series.iloc[-1]) if len(sma200_vals) >= 10 else float('nan')
-        sma200_slope  = float('nan')
-        if len(sma200_vals) >= 10:
-            sma200_slope = float(sma200_series.iloc[-1]) - float(sma200_series.iloc[-10])
+        sma200 = float(sma200_series.iloc[-1]) if len(sma200_vals) >= 10 else float('nan')  # noqa
 
-        macd_df     = ta.macd(close, fast=12, slow=26, signal=9)
-        macd_hist   = float(macd_df['MACDh_12_26_9'].iloc[-1])
-        macd_line   = macd_df['MACD_12_26_9']
-        signal_line = macd_df['MACDs_12_26_9']
-
-        golden_cross = False
-        for i in range(-3, 0):
-            try:
-                if (macd_line.iloc[i-1] < signal_line.iloc[i-1] and
-                        macd_line.iloc[i]   > signal_line.iloc[i]):
-                    golden_cross = True
-                    break
-            except Exception:
-                pass
+        macd_df   = ta.macd(close, fast=12, slow=26, signal=9)
+        macd_hist = float(macd_df['MACDh_12_26_9'].iloc[-1])
 
         avg_vol_20 = float(volume.iloc[-20:].mean()) if len(volume) >= 20 else float('nan')
         vol_ratio  = latest_vol / avg_vol_20 if avg_vol_20 > 0 else float('nan')
@@ -344,26 +364,13 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
             ret_1d = (close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]
 
         high_20 = float(df['High'].iloc[-20:].max()) if len(df) >= 20 else float('nan')
-        low_20  = float(df['Low'].iloc[-20:].min())  if len(df) >= 20 else float('nan')
-
-        # 盤整區間（倒數第 4~20 天，共 17 天）
-        consolidation_range = float('nan')
-        consolidation_high  = float('nan')
-        if len(df) >= 21:
-            consol_high_s = df['High'].iloc[-20:-3]
-            consol_low_s  = df['Low'].iloc[-20:-3]
-            consol_max    = float(consol_high_s.max())
-            consol_min    = float(consol_low_s.min())
-            consolidation_range = (consol_max - consol_min) / consol_min if consol_min > 0 else float('nan')
-            consolidation_high  = consol_max
 
         market_cap   = float('nan')
         company_name = ticker
         try:
             info         = yf.Ticker(ticker).fast_info
             market_cap   = float(getattr(info, 'market_cap', float('nan')) or float('nan'))
-            # shortName 從 fast_info 取不到時，直接用 ticker 代號，避免再呼叫 .info（極慢）
-            company_name = ticker
+            company_name = getattr(yf.Ticker(ticker).info, 'shortName', ticker) or ticker
         except Exception:
             pass
 
@@ -375,110 +382,12 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         if np.isnan(ema20) or np.isnan(sma50):                      return None
         if latest_close <= ema20 or latest_close <= sma50:          return None
 
-        # ── 加分計算（v3.2）────────────────────────────────────
-        score    = 40.0
-        bd_parts = ['基底+40']
-        reason_parts = []
+        # ── New_Grok_Elite_Score v5.0 ────────────────────────────
+        new_score, new_bd, cb_s, pq_s, vs_s, rs_s, tc_s, bonus_s = calc_new_elite_score(
+            latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist
+        )
 
-        # ── 1. Pullback Quality（最高 +16）──────────────────────
-        pullback_ratio = latest_close / high_20 if (not np.isnan(high_20) and high_20 > 0) else 0.0
-        pb_pct = (1 - pullback_ratio) * 100 if pullback_ratio > 0 else float('nan')
-
-        if latest_close < ema20:
-            pullback_score = 0
-        elif 0.85 <= pullback_ratio <= 0.95:
-            pullback_score = 16
-        elif 0.80 <= pullback_ratio < 0.85:
-            pullback_score = 11
-        elif 0.95 < pullback_ratio <= 0.98:
-            pullback_score = 9
-        elif 0.75 <= pullback_ratio < 0.80:
-            pullback_score = 6
-        else:
-            pullback_score = 0
-
-        if pullback_score > 0:
-            score += pullback_score
-            bd_parts.append(f'PullbackQ+{pullback_score}')
-            reason_parts.append(f'從20日高點回檔{pb_pct:.1f}%，守EMA20')
-
-        # ── 2. Relative Strength（最高 +12）─────────────────────
-        rs = 0
-        beat_spy = not np.isnan(spy_ret) and ret_1m > spy_ret
-        beat_qqq = not np.isnan(qqq_ret) and ret_1m > qqq_ret
-        if   beat_spy and beat_qqq: rs = 12
-        elif beat_spy or  beat_qqq: rs = 6
-        if rs > 0:
-            score += rs
-            bd_parts.append(f'RelStr+{rs}')
-            spy_str = f'SPY:{spy_ret:.1%}' if not np.isnan(spy_ret) else 'SPY:N/A'
-            qqq_str = f'QQQ:{qqq_ret:.1%}' if not np.isnan(qqq_ret) else 'QQQ:N/A'
-            reason_parts.append(f'1M報酬{ret_1m:.1%}>{spy_str}&{qqq_str}')
-
-        # ── 3. Technical Confirmation（最高 +10）────────────────
-        rsi_ok  = 40 <= rsi14 <= 65
-        macd_ok = macd_hist > 0 or golden_cross
-        tc = (5 if rsi_ok else 0) + (5 if macd_ok else 0)
-        if tc > 0:
-            score += tc
-            bd_parts.append(f'TechConf+{tc}')
-            parts_ = []
-            if rsi_ok:  parts_.append(f'RSI{rsi14:.0f}健康')
-            if macd_ok: parts_.append(f'MACD{"金叉" if golden_cross else ""}多頭')
-            reason_parts.append('，'.join(parts_))
-
-        # ── 4. Consolidation Breakout（最高 +10）────────────────
-        cb = 0
-        consol_ok   = (not np.isnan(consolidation_range) and
-                       consolidation_range <= 0.12)
-        breakout_ok = (consol_ok and
-                       not np.isnan(consolidation_high) and
-                       latest_close > consolidation_high and
-                       not np.isnan(vol_ratio) and vol_ratio >= 1.5)
-        if   breakout_ok: cb = 10
-        elif consol_ok:   cb = 5
-        if cb > 0:
-            score += cb
-            bd_parts.append(f'CBreakout+{cb}')
-            if breakout_ok:
-                reason_parts.append(f'盤整{consolidation_range:.1%}後放量突破（量比{vol_ratio:.1f}x）')
-            else:
-                reason_parts.append(f'盤整{consolidation_range:.1%}，尚未放量突破')
-
-        # ── 5. Volume Surge（最高 +8）───────────────────────────
-        vs = 0
-        if not np.isnan(vol_ratio):
-            if   vol_ratio >= 1.5: vs = 8
-            elif vol_ratio >= 1.3: vs = 5
-            elif vol_ratio >= 1.2: vs = 3
-        if vs > 0:
-            score += vs
-            bd_parts.append(f'VolSurge+{vs}')
-            reason_parts.append(f'量比{vol_ratio:.2f}x')
-
-        # ── 6. Trend Strength（最高 +5）─────────────────────────
-        ts = 0
-        above_sma200 = not np.isnan(sma200) and latest_close > sma200
-        slope_up     = not np.isnan(sma200_slope) and sma200_slope > 0
-        if   above_sma200 and slope_up: ts = 5
-        elif above_sma200:              ts = 3
-        if ts > 0:
-            score += ts
-            bd_parts.append(f'TrendStrength+{ts}')
-            slope_desc = '斜率上升' if slope_up else '斜率持平/偏弱'
-            reason_parts.append(f'站上SMA200（{slope_desc}）')
-
-        # ── 7. Bonus（+4）：PQ≥11 且 CB≥5 ──────────────────────
-        bonus = 0
-        if pullback_score >= 11 and cb >= 5:
-            bonus = 4
-            score += bonus
-            bd_parts.append('Bonus+4')
-            reason_parts.append('PullbackQ+CBreakout雙重共振')
-
-        score = min(score, 100.0)
-
-        # ── Gap Risk ────────────────────────────────────────────
+        # ── Gap Risk ─────────────────────────────────────────────
         if not np.isnan(ret_1d):
             ret_1d_pct = ret_1d * 100
             if   ret_1d_pct > 6: gap_risk = '高'
@@ -487,99 +396,95 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         else:
             gap_risk = '低'
 
-        if gap_risk == '高':
-            reason_parts.append('已大漲，建議等拉回或小心追價')
-
         return {
-            'Ticker'            : ticker,
-            'Company_Name'      : company_name,
-            'Grok_Elite_Score'  : round(score, 1),
-            'pullback_score'    : pullback_score,
-            'Current_Price'     : round(latest_close, 2),
-            'Market_Cap_B'      : round(market_cap / 1e9, 1),
-            '1M_Return_pct'     : round(ret_1m * 100, 2),
-            'RSI'               : round(rsi14, 1),
-            'Volume_Ratio'      : round(vol_ratio, 2),
-            'EMA20'             : round(ema20, 2),
-            'SMA50'             : round(sma50, 2),
-            'MACD_Hist'         : round(macd_hist, 4),
-            'High_20'           : round(high_20, 2) if not np.isnan(high_20) else np.nan,
-            'Gap_Risk'          : gap_risk,
-            'TrendStrength_pts' : ts,
-            'Score_Breakdown'   : ' · '.join(bd_parts),
-            'Reason'            : '；'.join(reason_parts) if reason_parts else '通過硬濾鏡',
+            'Ticker'               : ticker,
+            'CN_Name'              : '',
+            'New_Grok_Elite_Score' : new_score,
+            'Company_Name'         : company_name,
+            'Current_Price'        : round(latest_close, 2),
+            'Market_Cap_B'         : round(market_cap / 1e9, 1),
+            '1M_Return_pct'        : round(ret_1m * 100, 2),
+            'RSI'                  : round(rsi14, 1),
+            'Volume_Ratio'         : round(vol_ratio, 2),
+            'EMA20'                : round(ema20, 2),
+            'SMA50'                : round(sma50, 2),
+            'MACD_Hist'            : round(macd_hist, 4),
+            'High_20'              : round(high_20, 2) if not np.isnan(high_20) else np.nan,
+            'Score_Breakdown'      : new_bd,
+            'Reason'               : '通過硬濾鏡',
+            'Gap_Risk'             : gap_risk,
+            'CB_score'             : cb_s,
+            'PullbackQ_score'      : pq_s,
+            'VS_score'             : vs_s,
+            'RS_score'             : rs_s,
+            'TC_score'             : tc_s,
+            'Bonus_score'          : bonus_s,
+            'X_Catalyst_Score'     : '待 Grok 評分',
+            'X_Catalyst_Reason'    : '待 Grok 評分',
         }
 
-    except Exception as e:
+    except Exception:
         return None
 
 
-# ── 主迴圈：對所有股票評分 ──────────────────────────────────────
-print(f'🔢 開始計算 {len(price_data)} 檔股票的 Grok Elite Score...')
-print('（此步驟需要查詢各股票市值，約需 3-8 分鐘，請耐心等候）\n')
+def run_scoring(price_data, spy_ret_1m, qqq_ret_1m):
+    print(f'🔢 開始計算 {len(price_data)} 檔股票的 New_Grok_Elite_Score...')
+    print('（此步驟需要查詢各股票市值，約需 3-8 分鐘，請耐心等候）\n')
 
-records  = []
-skipped  = 0
-total    = len(price_data)
+    records = []
+    skipped = 0
+    total   = len(price_data)
 
-for i, (ticker, df) in enumerate(price_data.items()):
-    result = calc_indicators_and_score(ticker, df, spy_ret_1m, qqq_ret_1m)
-    if result:
-        records.append(result)
-    else:
-        skipped += 1
+    for i, (ticker, df) in enumerate(price_data.items()):
+        result = calc_indicators_and_score(ticker, df, spy_ret_1m, qqq_ret_1m)
+        if result:
+            records.append(result)
+        else:
+            skipped += 1
 
-    if (i + 1) % 50 == 0:
-        print(f'  進度：{i+1}/{total}，通過篩選：{len(records)}，淘汰：{skipped}')
-    time.sleep(0.05)
+        if (i + 1) % 50 == 0:
+            print(f'  進度：{i+1}/{total}，通過篩選：{len(records)}，淘汰：{skipped}')
+        time.sleep(0.05)
 
-print(f'\n✅ 評分完成！通過硬濾鏡：{len(records)} 檔，淘汰：{skipped} 檔')
+    print(f'\n✅ 評分完成！通過硬濾鏡：{len(records)} 檔，淘汰：{skipped} 檔')
+    return records
 
 
-# === code-export-csv ===
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ⓪ 宏觀快照（自動抓取 Brent / SPY / QQQ，每次執行自動更新）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ════════════════════════════════════════════════════════════════
+# ⑤ 宏觀快照
+# ════════════════════════════════════════════════════════════════
 def fetch_macro():
     m = {}
     try:
-        hist_bz    = yf.Ticker('BZ=F').history(period='5d')
-        brent_px   = float(hist_bz['Close'].dropna().iloc[-1])
-        hist_bz1m  = yf.Ticker('BZ=F').history(period='1mo')['Close'].dropna()
-        brent_chg  = (hist_bz1m.iloc[-1] / hist_bz1m.iloc[0] - 1) * 100
-        m['brent']      = f"{brent_px:.2f}"
-        m['brent_note'] = f"1M {'+'if brent_chg>=0 else ''}{brent_chg:.1f}%"
-    except:
-        m['brent'] = 'N/A'; m['brent_note'] = ''
+        hist_bz   = yf.Ticker('BZ=F').history(period='5d')
+        brent_px  = float(hist_bz['Close'].dropna().iloc[-1])
+        hist_bz1m = yf.Ticker('BZ=F').history(period='1mo')['Close'].dropna()
+        brent_chg = (hist_bz1m.iloc[-1] / hist_bz1m.iloc[0] - 1) * 100
+        m['brent']      = f'{brent_px:.2f}'
+        m['brent_note'] = f"1M {'+' if brent_chg >= 0 else ''}{brent_chg:.1f}%"
+    except Exception:
+        m['brent'] = 'N/A'
+        m['brent_note'] = ''
 
     def etf_perf(tk):
         try:
             cl   = yf.Ticker(tk).history(period='1y')['Close'].dropna()
-            # 統一去除 timezone 以避免比較錯誤
-            idx  = cl.index.tz_localize(None) if cl.index.tz is None else cl.index.tz_convert(None)
-            ytdc = cl[idx.year == datetime.today().year]
+            ytdc = cl[cl.index.year == datetime.today().year]
             ytd  = (cl.iloc[-1] / ytdc.iloc[0] - 1) * 100 if len(ytdc) > 0 else float('nan')
             mo1  = (cl.iloc[-1] / cl.iloc[-22] - 1) * 100
-            s    = lambda v: '+' if v >= 0 else ''
-            return f"{s(ytd)}{ytd:.1f}%", f"{s(mo1)}{mo1:.1f}%"
-        except:
+            sign = lambda v: '+' if v >= 0 else ''
+            return f'{sign(ytd)}{ytd:.1f}%', f'{sign(mo1)}{mo1:.1f}%'
+        except Exception:
             return 'N/A', 'N/A'
 
     m['spy_ytd'], m['spy_1m'] = etf_perf('SPY')
     m['qqq_ytd'], m['qqq_1m'] = etf_perf('QQQ')
     return m
 
-MACRO = fetch_macro()
-print(f"📡 宏觀 | Brent ${MACRO.get('brent','N/A')} {MACRO.get('brent_note','')} | SPY YTD {MACRO.get('spy_ytd','N/A')} 1M {MACRO.get('spy_1m','N/A')} | QQQ YTD {MACRO.get('qqq_ytd','N/A')} 1M {MACRO.get('qqq_1m','N/A')}")
 
-import json
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.io as pio
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ① 中文公司名稱對照表
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ════════════════════════════════════════════════════════════════
+# ⑥ 中文名稱 / 產業對照表
+# ════════════════════════════════════════════════════════════════
 CN_NAMES = {
     'AAPL':'蘋果公司','MSFT':'微軟','NVDA':'輝達','AMZN':'亞馬遜',
     'META':'Meta平台','GOOGL':'Alphabet A','GOOG':'Alphabet C',
@@ -606,7 +511,7 @@ CN_NAMES = {
     'WMT':'沃爾瑪','TGT':'塔吉特','HD':'家得寶','LOW':'勞氏',
     'TJX':'TJX公司','ROST':'羅斯百貨','DLTR':'一元樹','DG':'達樂',
     'MCD':'麥當勞','SBUX':'星巴克','YUM':'百勝餐飲','NKE':'耐吉',
-    'DIS':'迪士尼','CMCSA':'康卡斯特','NFLX':'網飛',
+    'DIS':'迪士尼','CMCSA':'康卡斯特',
     'PG':'寶潔','KO':'可口可樂','PEP':'百事可樂',
     'PM':'菲利普莫里斯','MO':'奧馳亞','MDLZ':'億滋國際',
     'BA':'波音','RTX':'雷神技術','LMT':'洛克希德馬丁',
@@ -624,117 +529,43 @@ CN_NAMES = {
     'AMT':'美國鐵塔','PLD':'普洛斯','EQIX':'Equinix',
     'CCI':'皇冠城堡','DLR':'數位大樓信託','PSA':'公共儲存',
     'MELI':'美客多','TTD':'交易台','DDOG':'Datadog',
-    'TEAM':'Atlassian','ZS':'Zscaler','CRWD':'眾擊',
+    'TEAM':'Atlassian','ZS':'Zscaler','CRWD':'CrowdStrike',
     'FTNT':'飛塔','NET':'Cloudflare','WDAY':'Workday',
     'OKTA':'Okta','ZM':'Zoom','DOCU':'DocuSign',
     'ON':'安森美','NXPI':'恩智浦','MRVL':'美滿電子',
     'ENPH':'安費諾','FSLR':'第一太陽能','CEG':'星座能源',
     'NEM':'紐蒙特','FCX':'自由港麥克','ALB':'雅保',
-    'LIN':'林德','APD':'空氣產品','ECL':'藝康',
-    'SHW':'宣偉','PPG':'PPG工業',
+    'LIN':'林德','APD':'空氣產品','ECL':'藝康','SHW':'宣偉',
     'DHI':'D.R.霍頓','LEN':'萊納房屋','PHM':'普爾特',
     'ASML':'ASML','TSM':'台積電','MCHP':'微芯科技',
     'MSTR':'MicroStrategy','COIN':'Coinbase','HOOD':'Robinhood',
     'SOFI':'SoFi','NU':'Nu Holdings','AFRM':'Affirm',
     'CPRT':'Copart','ODFL':'老道明','FAST':'法斯特爾',
     'PAYX':'Paychex','ADP':'自動數據',
-    # 金融
-    'SPGI':'標普全球','MCO':'穆迪','ICE':'洲際交易所',
-    'CME':'芝商所','CBOE':'芝加哥期權所','MSCI':'MSCI指數',
     'FIS':'Fidelity資訊','FI':'富達國際','BR':'博睿信息',
-    'PNC':'PNC金融','TFC':'特魯斯特金融','COF':'Capital One',
+    'PNC':'PNC金融','TFC':'特魯斯特金融',
     'AIG':'美國國際集團','MET':'大都會人壽','PRU':'保德信金融',
     'AFL':'美國家庭','MMC':'達信集團','AON':'怡安集團','CB':'丘博集團',
-    # 科技補充
-    'ORCL':'甲骨文','SAP':'思愛普','ACN':'埃森哲',
-    'CRM':'Salesforce','NOW':'ServiceNow','SNOW':'雪花計算',
-    'PLTR':'帕蘭提爾','UBER':'優步','DASH':'DoorDash',
-    'DDOG':'Datadog','NET':'Cloudflare','OKTA':'Okta',
-    'DOCU':'DocuSign','ZM':'Zoom視訊','CRWD':'CrowdStrike',
-    'S':'SentinelOne','HUBS':'HubSpot','BILL':'Bill.com',
-    'MDB':'MongoDB','ESTC':'彈性搜索','GTLB':'GitLab',
-    'PATH':'UiPath','AI':'C3.ai','BBAI':'BigBear.ai',
-    'SOUN':'SoundHound','ASAN':'Asana','FROG':'JFrog',
-    'CFLT':'Confluent','DOMO':'Domo','BOX':'Box雲端',
-    'WORK':'Slack','TWLO':'Twilio','BAND':'Bandwidth',
-    'AMPL':'Amplitude','BRZE':'Braze','SPRK':'Spark',
-    # 半導體補充
-    'MCHP':'微芯科技','WOLF':'科銳','MPWR':'邁信電子',
-    'SITM':'SiTime','ACLS':'Axcelis','AEHR':'Aehr Test',
-    'ONTO':'Onto Innovation','UCTT':'超潔淨科技',
-    'COHU':'Cohu','ICHR':'Ichor Holdings',
-    # 醫療/生技補充
-    'DXCM':'德康醫療','ALGN':'愛齊科技','HOLX':'豪洛捷',
-    'HSIC':'亨利夏恩','PKI':'珀金埃爾默','RMD':'瑞思邁',
-    'STE':'索雷克斯','WAT':'沃特斯','TECH':'Bio-Techne',
-    'EXAS':'Exact Sciences','NTRA':'Natera','OMIC':'Acutus',
-    'ILMN':'Illumina','PACB':'太平洋生物','NVAX':'諾瓦瓦克斯',
-    'BNTX':'BioNTech','SGEN':'西雅圖基因','ALNY':'Alnylam',
-    'BMRN':'BioMarin','IONS':'Ionis製藥','RARE':'超基因',
-    # 消費/零售補充
-    'LULU':'露露樂蒙','DECK':'Deckers戶外','SKX':'斯凱奇',
-    'UAA':'Under Armour A','UA':'Under Armour C','PVH':'PVH集團',
-    'RL':'拉夫勞倫','TPR':'Tapestry','CPRI':'Capri控股',
-    'RH':'RH傢俱','WSM':'威廉斯索諾瑪','BBWI':'巴斯巴德',
-    'ANF':'Abercrombie','AEO':'美國鷹牌','URBN':'城市外裝',
-    'GPS':'Gap','BURL':'百靈頓','FIVE':'Five Below',
-    'OLLI':'奧利超值','BJ':'BJ批發','PSMT':'普萊斯超市',
-    # 餐飲/娛樂
-    'CMG':'奇波雷墨西哥','DRI':'達登餐廳','EAT':'Brinker',
-    'BJRI':'BJ餐廳','CAKE':'芝士工廠','WING':'Wingstop',
-    'PTLO':'Portillos','BOWLERO':'Bowlero','PLAY':'Dave&Busters',
+    'ACN':'埃森哲','SAP':'思愛普',
+    'LULU':'露露樂蒙','DECK':'Deckers戶外',
     'LVS':'拉斯維加斯金沙','WYNN':'永利渡假','MGM':'美高梅',
-    'CZR':'凱撒娛樂','RCL':'皇家加勒比','CCL':'嘉年華郵輪',
-    'NCLH':'挪威郵輪','MAR':'萬豪國際','HLT':'希爾頓',
-    'H':'凱悅酒店','IHG':'洲際酒店','VAC':'萬豪假期',
-    # 能源/原物料補充
-    'DVN':'Devon能源','FANG':'鑽石背能源','MRO':'Marathon石油',
-    'APA':'APA集團','HAL':'哈里伯頓','BKR':'貝克休斯',
-    'NOV':'國民油井','RIG':'越洋鑽探','CIVI':'Civitas資源',
-    'CLF':'Cleveland-Cliffs','X':'美國鋼鐵','NUE':'紐柯鋼鐵',
-    'RS':'Reliance鋼鐵','ATI':'ATI合金','CRS':'Carpenter',
-    'MP':'MP材料','MTDR':'Matador資源','CHRD':'Chord能源',
-    # 工業補充
-    'TDG':'TransDigm','HEI':'Heico','TXT':'德事隆',
-    'WM':'廢物管理','RSG':'共和服務','SRCL':'Stericycle',
-    'URI':'United租賃','HEES':'H&E設備','AL':'Air Lease',
-    'GATX':'GATX租賃','FLR':'福陸工程','PWR':'Quanta服務',
-    'EME':'EMCOR','MYR':'MYR集團','IESC':'IES控股',
-    'HUBB':'Hubbell','GNRC':'Generac','REXN':'Rexnord',
-    'AOS':'史密斯水務','WTS':'Watts水務',
-    # 房地產/REITs補充
-    'O':'Realty Income','VICI':'維奇地產','MPW':'醫療地產',
-    'PEAK':'Healthpeak','DOC':'Physicians Realty',
-    'KIM':'Kimco地產','REG':'Regency中心','SPG':'西蒙地產',
-    'MAC':'Macerich','PEI':'PREIT','CBL':'CBL地產',
-    'EXR':'額外空間','CUBE':'CubeSmart','LSI':'Life Storage',
-    'REZI':'Resideo','TRNO':'Terreno','COLD':'Americold',
-    # 通訊補充
+    'MAR':'萬豪國際','HLT':'希爾頓',
     'T':'美國電話電報','VZ':'Verizon','TMUS':'T-Mobile',
-    'LBRDA':'Liberty Broadband','CHTR':'Charter通訊',
-    'LUMN':'Lumen科技','FYBR':'Frontier通訊',
-    'AMC':'AMC娛樂','IMAX':'IMAX','LYV':'Live Nation',
-    'SPOT':'Spotify','PINS':'Pinterest','SNAP':'Snapchat',
-    'RBLX':'Roblox','U':'Unity軟體','MTCH':'Match集團',
-    'BMBL':'Bumble','GRINDR':'Grindr',
-    # 汽車/交通補充
-    'LCID':'Lucid汽車','XPEV':'小鵬汽車','NIO':'蔚來汽車',
-    'LI':'理想汽車','NKLA':'尼古拉','FSR':'Fisker',
-    'POLESTAR':'Polestar','GOEV':'Canoo',
-    'LYFT':'Lyft','BIRD':'Bird滑板車',
-    'BLDE':'Blade空中出行','ACHR':'Archer航空',
-    # 金融科技/加密補充
-    'SQ':'Block(Square)','AFRM':'Affirm','SOFI':'SoFi科技',
-    'NU':'Nu Holdings','OPEN':'Opendoor','UWMC':'UWM控股',
-    'RKT':'Rocket公司','PFSI':'PennyMac金融',
-    'MSTR':'MicroStrategy','COIN':'Coinbase','HOOD':'Robinhood',
+    'SPOT':'Spotify','PINS':'Pinterest','SNAP':'Snapchat','RBLX':'Roblox',
+    'LCID':'Lucid汽車','XPEV':'小鵬汽車','NIO':'蔚來汽車','LI':'理想汽車',
+    'SQ':'Block(Square)',
+    'O':'Realty Income','VICI':'維奇地產',
+    'DXCM':'德康醫療','ALGN':'愛齊科技',
+    'CMG':'奇波雷墨西哥','WING':'Wingstop',
+    'DVN':'Devon能源','MRO':'Marathon石油','HAL':'哈里伯頓',
+    'CLF':'Cleveland-Cliffs','NUE':'紐柯鋼鐵',
+    'TDG':'TransDigm','HEI':'Heico',
+    'WM':'廢物管理','RSG':'共和服務',
+    'URI':'United租賃',
+    'HUBB':'Hubbell','GNRC':'Generac',
+    'FANG':'鑽石背能源',
 }
 
-def get_cn_name(ticker, en_name=''):
-    return CN_NAMES.get(str(ticker).upper(), en_name or ticker)
-
-# ── 產業分類（中文）對照表 ──────────────────────────────────────
-# ── 產業分類：sector 英文 → 中文翻譯表（yfinance 回傳值）──────
 SECTOR_ZH = {
     'Technology'            : '科技',
     'Healthcare'            : '醫療',
@@ -749,50 +580,53 @@ SECTOR_ZH = {
     'Communication Services': '通訊媒體',
 }
 
-# ── 執行時動態抓取 sector（只對通過篩選的股票查詢）────────────
-_sector_cache = {}   # 避免重複查詢同一 ticker
+_sector_cache = {}
+
+
+def get_cn_name(ticker, en_name=''):
+    return CN_NAMES.get(str(ticker).upper(), en_name or ticker)
+
 
 def get_sector(ticker):
     tk = str(ticker).upper()
     if tk in _sector_cache:
         return _sector_cache[tk]
     try:
-        info = yf.Ticker(tk).info
+        info      = yf.Ticker(tk).info
         sector_en = info.get('sector', '') or ''
-        result = SECTOR_ZH.get(sector_en, sector_en or '—')
+        result    = SECTOR_ZH.get(sector_en, sector_en or '—')
     except Exception:
         result = '—'
     _sector_cache[tk] = result
     return result
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ② K 線圖產生函式（Plotly，含成交量 / RSI / MACD）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ════════════════════════════════════════════════════════════════
+# ⑦ Plotly K 線圖
+# ════════════════════════════════════════════════════════════════
 def create_kline_plotly(ticker, df_raw, rank, score, cn_name, signal_text=''):
     try:
-        df   = df_raw.copy().dropna()
-        n    = min(80, len(df))
-        d    = df.iloc[-n:].copy()
-        cl   = df['Close']
+        df    = df_raw.copy().dropna()
+        n     = min(80, len(df))
+        d     = df.iloc[-n:].copy()
+        cl    = df['Close']
         ema20 = ta.ema(cl, length=20).iloc[-n:]
         sma50 = ta.sma(cl, length=50).iloc[-n:]
         rsi14 = ta.rsi(cl, length=14).iloc[-n:]
         macd_r = ta.macd(cl, fast=12, slow=26, signal=9)
-        m_l    = macd_r['MACD_12_26_9'].iloc[-n:]
-        m_s    = macd_r['MACDs_12_26_9'].iloc[-n:]
-        m_h    = macd_r['MACDh_12_26_9'].iloc[-n:]
-        dates  = d.index.strftime('%Y-%m-%d').tolist()
-        v_col  = ['#30D158' if float(c)>=float(o) else '#FF453A'
-                   for c,o in zip(d['Close'],d['Open'])]
-        h_col  = ['#30D158' if float(v)>=0 else '#FF453A' for v in m_h]
+        m_l   = macd_r['MACD_12_26_9'].iloc[-n:]
+        m_s   = macd_r['MACDs_12_26_9'].iloc[-n:]
+        m_h   = macd_r['MACDh_12_26_9'].iloc[-n:]
+        dates = d.index.strftime('%Y-%m-%d').tolist()
+        v_col = ['#30D158' if float(c) >= float(o) else '#FF453A'
+                 for c, o in zip(d['Close'], d['Open'])]
+        h_col = ['#30D158' if float(v) >= 0 else '#FF453A' for v in m_h]
 
         fig = make_subplots(
             rows=4, cols=1, shared_xaxes=True,
-            row_heights=[0.50,0.15,0.175,0.175],
+            row_heights=[0.50, 0.15, 0.175, 0.175],
             vertical_spacing=0.018
         )
-        # K 線
         fig.add_trace(go.Candlestick(
             x=dates, open=d['Open'].tolist(), high=d['High'].tolist(),
             low=d['Low'].tolist(), close=d['Close'].tolist(),
@@ -804,17 +638,12 @@ def create_kline_plotly(ticker, df_raw, rank, score, cn_name, signal_text=''):
             line=dict(color='#FF9F0A', width=1.8)), row=1, col=1)
         fig.add_trace(go.Scatter(x=dates, y=sma50.tolist(), name='SMA50',
             line=dict(color='#0A84FF', width=1.8)), row=1, col=1)
-        # 成交量
         fig.add_trace(go.Bar(x=dates, y=d['Volume'].tolist(),
             marker_color=v_col, name='Volume', showlegend=False), row=2, col=1)
-        # RSI
         fig.add_trace(go.Scatter(x=dates, y=rsi14.tolist(), name='RSI(14)',
             line=dict(color='#FFD60A', width=1.5)), row=3, col=1)
         for lvl, clr in [(70, '#FF453A'), (50, '#48484a'), (30, '#30D158')]:
-            fig.add_shape(type='line', x0=0, x1=1, xref='paper',
-                          y0=lvl, y1=lvl, yref='y3',
-                          line=dict(dash='dot', color=clr, width=1))
-        # MACD
+            fig.add_hline(y=lvl, line_dash='dot', line_color=clr, line_width=1, row=3, col=1)
         fig.add_trace(go.Bar(x=dates, y=m_h.tolist(), marker_color=h_col,
             name='Histogram', showlegend=False), row=4, col=1)
         fig.add_trace(go.Scatter(x=dates, y=m_l.tolist(), name='MACD',
@@ -824,115 +653,123 @@ def create_kline_plotly(ticker, df_raw, rank, score, cn_name, signal_text=''):
 
         fig.update_layout(
             title=dict(
-                text=f'#{rank} {ticker} · {cn_name} · Score {score:.1f}',
+                text=f'#{rank} {ticker} · {cn_name} · Score {score}',
                 font=dict(size=15, color='#E5E5EA'), x=0.01
             ),
             paper_bgcolor='#161b22', plot_bgcolor='#0d1117',
             font=dict(color='#8b949e', family='Noto Sans TC, sans-serif', size=11),
-            height=580, margin=dict(l=55,r=25,t=52,b=15),
+            height=580, margin=dict(l=55, r=25, t=52, b=15),
             xaxis_rangeslider_visible=False,
             legend=dict(orientation='h', yanchor='bottom', y=1.01,
                         xanchor='right', x=1, font=dict(size=10),
                         bgcolor='rgba(0,0,0,0)')
         )
-        for i in range(1,5):
+        for i in range(1, 5):
             fig.update_xaxes(gridcolor='#21262d', row=i, col=1, showgrid=True)
             fig.update_yaxes(gridcolor='#21262d', row=i, col=1, showgrid=True)
 
         return pio.to_html(fig, include_plotlyjs='cdn', full_html=False,
-                           config={'displayModeBar':False,'responsive':True})
+                           config={'displayModeBar': False, 'responsive': True})
     except Exception as e:
         return f'<p style="color:#636366;padding:20px">⚠️ {ticker} 圖表產生失敗：{e}</p>'
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ③ HTML 報告產生函式
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# ════════════════════════════════════════════════════════════════
+# ⑧ HTML 報告輔助函式
+# ════════════════════════════════════════════════════════════════
 def sc_color(s):
-    if s>=80: return '#30D158'    # 綠 — 低風險 (80+)
-    if s>=65: return '#D4832A'    # 暗橘 — 中風險 (65-79)
-    if s>=55: return '#FF6B35'    # 橘紅 — 中高風險 (55-64)
-    return '#FF453A'              # 紅 — 高風險 (<55)
+    if s >= 80: return '#30D158'
+    if s >= 65: return '#D4832A'
+    if s >= 55: return '#FF6B35'
+    return '#FF453A'
+
+
+def risk_label(score):
+    if score >= 80:   return '低',   '#30D158'
+    elif score >= 65: return '中',   '#D4832A'
+    elif score >= 55: return '中高', '#FF6B35'
+    else:             return '高',   '#FF453A'
+
 
 def score_bar(s):
     c   = sc_color(s)
     pct = min(s, 100)
-    # bar (60% width) then number — matches screenshot style
     return (
         f'<div style="display:flex;align-items:center;gap:10px;">'
-        f'<div style="width:60%;height:7px;background:#21262d;border-radius:4px;overflow:hidden;flex-shrink:0;">'
+        f'<div style="width:60%;height:7px;background:#21262d;border-radius:4px;'
+        f'overflow:hidden;flex-shrink:0;">'
         f'<div style="width:{pct:.0f}%;height:100%;background:{c};border-radius:4px;"></div>'
         f'</div>'
-        f'<span style="color:{c};font-weight:800;font-size:1.08em;min-width:36px;">{s:.1f}</span>'
+        f'<span style="color:{c};font-weight:800;font-size:1.08em;min-width:36px;">{s}</span>'
         f'</div>'
     )
 
+
 def rsi_fmt(v):
-    if v >= 70:   c, icon = '#FF453A', '⚠'    # 過熱紅色
-    elif v >= 55: c, icon = '#30D158', ''      # 健康綠色
-    elif v >= 40: c, icon = '#FF9F0A', ''      # 偏低橘色
-    else:         c, icon = '#636366', ''      # 過低灰色
+    if v >= 70:   c, icon = '#FF453A', '⚠'
+    elif v >= 55: c, icon = '#30D158', ''
+    elif v >= 40: c, icon = '#FF9F0A', ''
+    else:         c, icon = '#636366', ''
     lbl = f'{icon} {v:.0f}' if icon else f'{v:.0f}'
     return f'<span style="color:{c};font-weight:700">{lbl}</span>'
 
+
 def ret_fmt(v):
-    c='#30D158' if v>=0 else '#FF453A'
-    return f'<span style="color:{c};font-weight:600">{"+" if v>=0 else ""}{v:.2f}%</span>'
+    c = '#30D158' if v >= 0 else '#FF453A'
+    return f'<span style="color:{c};font-weight:600">{("+" if v >= 0 else "")}{v:.2f}%</span>'
+
 
 def vr_fmt(v):
-    if v >= 2.0:   c = '#30D158'   # +12 強放量 綠
-    elif v >= 1.5: c = '#74C27A'   # +8  放量   淺綠
-    elif v >= 1.2: c = '#C07A2A'   # +4  略放量 深橘
-    else:          c = '#636366'   # +0  縮量   灰
+    if v >= 2.0:   c = '#30D158'
+    elif v >= 1.5: c = '#74C27A'
+    elif v >= 1.2: c = '#C07A2A'
+    else:          c = '#636366'
     return f'<span style="color:{c};font-weight:600">{v:.2f}x</span>'
 
+
 def rank_icon(r):
-    return {1:'🥇',2:'🥈',3:'🥉'}.get(r, f'<span style="color:#636366">#{r}</span>')
+    return {1: '🥇', 2: '🥈', 3: '🥉'}.get(r, f'<span style="color:#636366">#{r}</span>')
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def risk_label(score):
-    if score >= 80:   return '低',     '#30D158'   # 80+ 低風險
-    elif score >= 65: return '中',     '#D4832A'   # 65-79 中風險
-    elif score >= 55: return '中高',   '#FF6B35'   # 55-64 中高風險
-    else:             return '高',     '#FF453A'   # <55 高風險
-
+# ════════════════════════════════════════════════════════════════
+# ⑨ 生成 HTML 報告
+# ════════════════════════════════════════════════════════════════
 def generate_html_report(top10_df, all_df, pdata, today_str, macro=None):
-    if macro is None: macro = MACRO
+    if macro is None:
+        macro = {}
     n_scan   = len(pdata)
     n_pass   = len(all_df)
     t1       = top10_df.iloc[0]
     t1_tick  = t1['Ticker']
-    t1_cn    = get_cn_name(t1_tick, t1.get('Company_Name',''))
-    t1_score = float(t1.get('Grok_Elite_Score', 40) or 40)
-    date_fmt = datetime.strptime(today_str,'%Y%m%d').strftime('%Y/%m/%d')
+    t1_cn    = get_cn_name(t1_tick, t1.get('Company_Name', ''))
+    t1_score = int(t1.get('New_Grok_Elite_Score', 40) or 40)
+    date_fmt = datetime.strptime(today_str, '%Y%m%d').strftime('%Y/%m/%d')
 
-    # ── 表格列 ──────────────────────────────────────────────────
     rows = ''
     for _, r in all_df.iterrows():
-        rk   = int(r.get('Rank', 0))
-        tk   = str(r.get('Ticker', ''))
-        cn   = get_cn_name(tk, r.get('Company_Name', ''))
-        sc   = float(r.get('Grok_Elite_Score', 40) or 40)
-        pr   = float(r.get('Current_Price', 0) or 0)
-        mc   = float(r.get('Market_Cap_B', 0) or 0)
-        rt   = float(r.get('1M_Return_pct', 0) or 0)
-        rs   = float(r.get('RSI', 0) or 0)
-        vr   = float(r.get('Volume_Ratio', 0) or 0)
-        bd   = str(r.get('Score_Breakdown', '')).replace('|', '·')
-        re_  = str(r.get('Reason', ''))
+        rk    = int(r.get('Rank', 0))
+        tk    = str(r.get('Ticker', ''))
+        cn    = get_cn_name(tk, r.get('Company_Name', ''))
+        sc    = int(r.get('New_Grok_Elite_Score', 40) or 40)
+        pr    = float(r.get('Current_Price', 0) or 0)
+        mc    = float(r.get('Market_Cap_B', 0) or 0)
+        rt    = float(r.get('1M_Return_pct', 0) or 0)
+        rs    = float(r.get('RSI', 0) or 0)
+        vr    = float(r.get('Volume_Ratio', 0) or 0)
+        bd    = str(r.get('Score_Breakdown', '')).replace('|', '·')
+        re_   = str(r.get('Reason', ''))
         gap_r = str(r.get('Gap_Risk', '低'))
-        sec  = get_sector(tk)
+        sec   = get_sector(tk)
         rlv, rc = risk_label(sc)
-        bg   = 'background:#1c2128;' if rk % 2 == 0 else ''
-        bl   = {1: '#FFD60A', 2: '#C0C0C0', 3: '#CD7F32'}.get(rk, '')
-        bl_s = f'border-left:3px solid {bl};' if bl else ''
+        bg    = 'background:#1c2128;' if rk % 2 == 0 else ''
+        bl    = {1: '#FFD60A', 2: '#C0C0C0', 3: '#CD7F32'}.get(rk, '')
+        bl_s  = f'border-left:3px solid {bl};' if bl else ''
         risk_badge = (
             f'<span style="display:inline-block;padding:3px 10px;border-radius:20px;'
             f'font-size:.75em;font-weight:800;letter-spacing:.04em;'
             f'background:{rc}22;color:{rc};border:1px solid {rc}55">{rlv}</span>'
         )
+        gap_c = '#FF453A' if gap_r == '高' else ('#FF9F0A' if gap_r == '中' else '#30D158')
         rows += (
             f'<tr style="{bg}{bl_s}">'
             f'<td style="text-align:center;padding:10px 6px;font-size:1.1em">{rank_icon(rk)}</td>'
@@ -940,83 +777,81 @@ def generate_html_report(top10_df, all_df, pdata, today_str, macro=None):
             f'font-size:1.02em;letter-spacing:.04em">{tk}</span></td>'
             f'<td style="padding:8px 8px;vertical-align:middle">'
             f'<div style="font-size:.97em;color:#E5E5EA;font-weight:500;word-break:break-word">{cn}</div>'
-            f'<div style="margin-top:4px"><span style="display:inline-block;padding:1px 7px;border-radius:4px;'
-            f'font-size:.70em;font-weight:600;color:#8b949e;background:#21262d">{sec}</span></div>'
-            f'</td>'
+            f'<div style="margin-top:4px"><span style="display:inline-block;padding:1px 7px;'
+            f'border-radius:4px;font-size:.70em;font-weight:600;color:#8b949e;'
+            f'background:#21262d">{sec}</span></div></td>'
             f'<td style="padding:8px 10px 8px 8px;vertical-align:middle;min-width:155px">'
             f'<div style="display:flex;align-items:center;gap:8px">'
-            f'{risk_badge}'
-            f'<div style="flex:1">{score_bar(sc)}</div>'
-            f'</div>'
-            f'</td>'
+            f'{risk_badge}<div style="flex:1">{score_bar(sc)}</div></div></td>'
             f'<td style="padding:10px 8px;text-align:right;color:#E5E5EA;'
             f'font-family:monospace;font-size:1.02em">${pr:.2f}</td>'
-            f'<td style="padding:10px 8px;text-align:right;color:#8b949e;font-size:.86em">${mc:.1f}B</td>'
+            f'<td style="padding:10px 8px;text-align:right;color:#8b949e;font-size:.86em">'
+            f'${mc:.1f}B</td>'
             f'<td style="padding:10px 8px;text-align:center">{ret_fmt(rt)}</td>'
             f'<td style="padding:10px 8px;text-align:center">{rsi_fmt(rs)}</td>'
             f'<td style="padding:10px 8px;text-align:center">{vr_fmt(vr)}</td>'
-            f'<td style="padding:10px 8px;color:#58a6ff;font-size:.72em;min-width:135px;max-width:135px;word-break:break-word;line-height:1.55;vertical-align:top">{bd}</td>'
-            f'<td style="padding:10px 8px;color:#c9d1d9;font-size:.88em;min-width:190px;max-width:230px;word-break:break-word;line-height:1.6;vertical-align:top">{re_}</td>'
-            f'<td style="padding:6px 4px;text-align:center;width:36px;white-space:nowrap;vertical-align:middle">'
-            f'<span style="color:{"#FF453A" if gap_r=="高" else ("#FF9F0A" if gap_r=="中" else "#30D158")};font-weight:800;font-size:.85em">{gap_r}</span>'
-            f'</td>'
-            f'</tr>'
+            f'<td style="padding:10px 8px;color:#58a6ff;font-size:.72em;min-width:135px;'
+            f'max-width:135px;word-break:break-word;line-height:1.55;vertical-align:top">{bd}</td>'
+            f'<td style="padding:10px 8px;color:#c9d1d9;font-size:.88em;min-width:190px;'
+            f'max-width:230px;word-break:break-word;line-height:1.6;vertical-align:top">{re_}</td>'
+            f'<td style="padding:6px 4px;text-align:center;width:36px;white-space:nowrap;'
+            f'vertical-align:middle"><span style="color:{gap_c};font-weight:800;font-size:.85em">'
+            f'{gap_r}</span></td></tr>'
         )
 
-        # ── K 線圖區（Top 10）─────────────────────────────────────────
     charts = ''
     print('  生成 K 線圖中...')
     for idx, (_, r) in enumerate(top10_df.head(10).iterrows()):
-        tk      = str(r.get('Ticker', ''))
-        rk      = int(r.get('Rank', idx + 1))
-        sc      = float(r.get('Grok_Elite_Score', 40) or 40)
-        cn      = get_cn_name(tk, r.get('Company_Name', ''))
-        bd      = str(r.get('Score_Breakdown', ''))
-        pr      = float(r.get('Current_Price', 0) or 0)
-        rt      = float(r.get('1M_Return_pct', 0) or 0)
-        ema20_v = float(r.get('EMA20', 0) or 0)
-        sma50_v = float(r.get('SMA50', 0) or 0)
-        rsi_v   = float(r.get('RSI', 0) or 0)
-        vr_v    = float(r.get('Volume_Ratio', 0) or 0)
-        above_ema   = pr >= ema20_v if ema20_v > 0 else False
-        above_sma50 = pr >= sma50_v if sma50_v > 0 else False
-        rsi_ok      = 40 <= rsi_v <= 72
-        vr_ok       = vr_v >= 1.5
-        ret_ok      = rt >= 8.0
-        rlv, rc     = risk_label(sc)
-        score_col   = sc_color(sc)
+        tk       = str(r.get('Ticker', ''))
+        rk       = int(r.get('Rank', idx + 1))
+        sc       = int(r.get('New_Grok_Elite_Score', 40) or 40)
+        cn       = get_cn_name(tk, r.get('Company_Name', ''))
+        bd       = str(r.get('Score_Breakdown', ''))
+        pr       = float(r.get('Current_Price', 0) or 0)
+        rt       = float(r.get('1M_Return_pct', 0) or 0)
+        ema20_v  = float(r.get('EMA20', 0) or 0)
+        sma50_v  = float(r.get('SMA50', 0) or 0)
+        rsi_v    = float(r.get('RSI', 0) or 0)
+        vr_v     = float(r.get('Volume_Ratio', 0) or 0)
+        above_ema    = pr >= ema20_v if ema20_v > 0 else False
+        above_sma50  = pr >= sma50_v if sma50_v > 0 else False
+        rsi_ok       = 40 <= rsi_v <= 72
+        vr_ok        = vr_v >= 1.5
+        ret_ok       = rt >= 8.0
+        rlv, rc      = risk_label(sc)
+        score_col    = sc_color(sc)
 
         def sig_vr(vr_val, txt):
-            # 4-tier by volume ratio value
-            if vr_val >= 2.0:   col, icon = '#30D158', '✅'   # +12
-            elif vr_val >= 1.5: col, icon = '#74C27A', '✅'   # +8
-            elif vr_val >= 1.2: col, icon = '#C07A2A', '⚠️'  # +4
-            else:               col, icon = '#636366', '⚠️'  # +0
+            if vr_val >= 2.0:   col, icon = '#30D158', '✅'
+            elif vr_val >= 1.5: col, icon = '#74C27A', '✅'
+            elif vr_val >= 1.2: col, icon = '#C07A2A', '⚠️'
+            else:               col, icon = '#636366', '⚠️'
             return f'<span style="color:{col};white-space:nowrap">{icon}&nbsp;{txt}</span>'
 
         def sig_rsi(rsi_val, txt):
-            # 4-tier by RSI value
-            if rsi_val >= 70:   col, icon = '#FF453A', '⚠️'  # 過熱
-            elif rsi_val >= 55: col, icon = '#30D158', '✅'   # 健康
-            elif rsi_val >= 40: col, icon = '#C07A2A', '⚠️'  # 偏低
-            else:               col, icon = '#636366', '⚠️'  # 過冷
+            if rsi_val >= 70:   col, icon = '#FF453A', '⚠️'
+            elif rsi_val >= 55: col, icon = '#30D158', '✅'
+            elif rsi_val >= 40: col, icon = '#C07A2A', '⚠️'
+            else:               col, icon = '#636366', '⚠️'
             return f'<span style="color:{col};white-space:nowrap">{icon}&nbsp;{txt}</span>'
 
         def sig(ok, txt):
-            # generic binary signal (EMA20, SMA50, 1M return)
-            col = '#30D158' if ok else '#636366'
+            col  = '#30D158' if ok else '#636366'
             icon = '✅' if ok else '⚠️'
             return f'<span style="color:{col};white-space:nowrap">{icon}&nbsp;{txt}</span>'
 
         strip = (
             f'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;'
-            f'padding:11px 20px;background:#161b22;border-bottom:1px solid #21262d;font-size:.82em;">'
+            f'padding:11px 20px;background:#161b22;border-bottom:1px solid #21262d;'
+            f'font-size:.82em;">'
             f'<span style="font-size:1.15em">{rank_icon(rk)}</span>'
             f'<span style="background:{rc}22;color:{rc};border:1px solid {rc}55;'
-            f'padding:2px 10px;border-radius:20px;font-size:.8em;font-weight:800">風險：{rlv}</span>'
-            f'<span style="font-weight:900;color:#E5E5EA;font-size:1.05em;letter-spacing:.04em">{tk}</span>'
+            f'padding:2px 10px;border-radius:20px;font-size:.8em;font-weight:800">'
+            f'風險：{rlv}</span>'
+            f'<span style="font-weight:900;color:#E5E5EA;font-size:1.05em;'
+            f'letter-spacing:.04em">{tk}</span>'
             f'<span style="color:#8b949e;font-size:.9em">{cn}</span>'
-            f'<span style="color:{score_col};font-weight:800">{sc:.0f}分</span>'
+            f'<span style="color:{score_col};font-weight:800">{sc}分</span>'
             f'<span style="color:#30363d">│</span>'
             f'{sig(above_ema, f"EMA20 ${ema20_v:.2f}")}'
             f'{sig(above_sma50, f"SMA50 ${sma50_v:.2f}")}'
@@ -1024,27 +859,27 @@ def generate_html_report(top10_df, all_df, pdata, today_str, macro=None):
             f'{sig_vr(vr_v, f"量比 {vr_v:.2f}x")}'
             f'{sig(ret_ok, f"1M +{rt:.1f}%")}'
             f'<span style="color:#30363d">│</span>'
-            f'<span style="color:#E5E5EA;font-family:monospace;font-weight:700">${pr:.2f} USD</span>'
+            f'<span style="color:#E5E5EA;font-family:monospace;font-weight:700">'
+            f'${pr:.2f} USD</span>'
             f'</div>'
         )
 
-        ch = create_kline_plotly(tk, pdata[tk], rk, sc, cn, bd) if tk in pdata else (
-            f'<p style="color:#636366;padding:20px">⚠️ {tk} 無 K 線資料</p>'
+        ch = (
+            create_kline_plotly(tk, pdata[tk], rk, sc, cn, bd)
+            if tk in pdata
+            else f'<p style="color:#636366;padding:20px">⚠️ {tk} 無 K 線資料</p>'
         )
         print(f'    #{rk} {tk} ✓')
         charts += (
             f'<div style="background:#0d1117;border:1px solid #21262d;border-radius:14px;'
             f'margin-bottom:24px;overflow:hidden;">'
-            f'{strip}'
-            f'<div>{ch}</div>'
-            f'</div>'
+            f'{strip}<div>{ch}</div></div>'
         )
 
-    # ── 風險等級圖例 & 評分說明 ───────────────────────────────────
     legend_html = '''
 <div class="sec" style="padding-top:20px">
   <div style="background:#161b22;border:1px solid #21262d;border-radius:10px;padding:20px 24px;margin-top:24px">
-    <div style="font-weight:800;color:#E5E5EA;margin-bottom:13px;font-size:1.02em">📐 細化 Grok Elite Score 評分說明</div>
+    <div style="font-weight:800;color:#E5E5EA;margin-bottom:13px;font-size:1.02em">📐 細化 Grok Elite Score v5.0 評分說明</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;font-size:.81em;color:#8b949e">
       <div>✅ 通過硬濾鏡 → <span style="color:#E5E5EA">基底 40 分</span></div>
       <div>📦 Consolidation Breakout → <span style="color:#FFD60A">最高 +18 分</span></div>
@@ -1066,36 +901,26 @@ def generate_html_report(top10_df, all_df, pdata, today_str, macro=None):
   </div>
 </div>'''
 
-    # ── format macro ─────────────────────────────────────────────
-    m = macro or {}
-    spy_ytd_c = '#30D158' if not str(m.get('spy_ytd','-')).startswith('-') else '#FF453A'
-    qqq_ytd_c = '#30D158' if not str(m.get('qqq_ytd','-')).startswith('-') else '#FF453A'
-    macro_vals = dict(
-        brent=m.get('brent','N/A'), brent_note=m.get('brent_note',''),
-        spy_ytd=m.get('spy_ytd','N/A'), spy_1m=m.get('spy_1m','N/A'),
-        qqq_ytd=m.get('qqq_ytd','N/A'), qqq_1m=m.get('qqq_1m','N/A'),
-        spy_ytd_c=spy_ytd_c, qqq_ytd_c=qqq_ytd_c
-    )
+    m = macro
+    spy_ytd_c = '#30D158' if not str(m.get('spy_ytd', '-')).startswith('-') else '#FF453A'
+    qqq_ytd_c = '#30D158' if not str(m.get('qqq_ytd', '-')).startswith('-') else '#FF453A'
+    _brent      = m.get('brent', 'N/A')
+    _brent_note = m.get('brent_note', '')
+    _spy_ytd    = m.get('spy_ytd', 'N/A')
+    _spy_1m     = m.get('spy_1m', 'N/A')
+    _qqq_ytd    = m.get('qqq_ytd', 'N/A')
+    _qqq_1m     = m.get('qqq_1m', 'N/A')
 
-    # ── pre-build macrobar HTML (avoid dict access inside f-string) ─
-    _brent      = macro_vals['brent']
-    _brent_note = macro_vals['brent_note']
-    _spy_ytd    = macro_vals['spy_ytd']
-    _spy_1m     = macro_vals['spy_1m']
-    _qqq_ytd    = macro_vals['qqq_ytd']
-    _qqq_1m     = macro_vals['qqq_1m']
-    _spy_c      = macro_vals['spy_ytd_c']
-    _qqq_c      = macro_vals['qqq_ytd_c']
     macrobar_html = (
         f'<div class="macrobar">'
         f'<div class="mbi"><span class="mbl">🛢 Brent 原油</span>'
         f'<span class="mbv" style="color:#FF9F0A">${_brent} USD</span>'
         f'<span class="mbn">{_brent_note}</span></div>'
         f'<div class="mbi"><span class="mbl">📈 SPY</span>'
-        f'<span class="mbv" style="color:{_spy_c}">YTD {_spy_ytd}</span>'
+        f'<span class="mbv" style="color:{spy_ytd_c}">YTD {_spy_ytd}</span>'
         f'<span class="mbn">1M {_spy_1m}</span></div>'
         f'<div class="mbi"><span class="mbl">📊 QQQ</span>'
-        f'<span class="mbv" style="color:{_qqq_c}">YTD {_qqq_ytd}</span>'
+        f'<span class="mbv" style="color:{qqq_ytd_c}">YTD {_qqq_ytd}</span>'
         f'<span class="mbn">1M {_qqq_1m}</span></div>'
         f'</div>'
     )
@@ -1152,7 +977,7 @@ tr:hover td{{background:rgba(56,139,253,.04)}}
 <div class="header">
   <div class="hi">
     <div class="brand">Grok Elite Swing &nbsp;·&nbsp; 機密報告</div>
-    <h1 class="htitle">Grok Elite Swing — <span>{date_fmt}</span> 收盤後分析</h1>
+    <h1 class="htitle">Grok Elite Swing v5.0 — <span>{date_fmt}</span> 收盤後分析</h1>
     <div class="hmeta">
       <span>📡 S&amp;P 500 + Nasdaq 100</span>
       <span>⏱ 7-14 天波段策略</span>
@@ -1163,7 +988,7 @@ tr:hover td{{background:rgba(56,139,253,.04)}}
   <div class="stats">
     <div class="card"><div class="clabel">掃描標的</div><div class="cval">{n_scan}</div><div class="csub">S&amp;P500 + Nasdaq100</div></div>
     <div class="card"><div class="clabel">通過篩選</div><div class="cval" style="color:#30D158">{n_pass}</div><div class="csub">硬濾鏡 + 趨勢確認</div></div>
-    <div class="card gold"><div class="clabel">今日 Top 1</div><div class="cval">{t1_tick}</div><div class="csub">{t1_cn} · 細化評分 {t1_score:.0f}</div></div>
+    <div class="card gold"><div class="clabel">今日 Top 1</div><div class="cval">{t1_tick}</div><div class="csub">{t1_cn} · 細化評分 {t1_score}</div></div>
     <div class="card"><div class="clabel">報告日期</div><div class="cval" style="font-size:1.15em">{date_fmt}</div><div class="csub">收盤後分析</div></div>
     <div class="card"><div class="clabel">持倉週期</div><div class="cval" style="font-size:1.2em">7-14天</div><div class="csub">波段策略</div></div>
   </div>
@@ -1214,94 +1039,115 @@ tr:hover td{{background:rgba(56,139,253,.04)}}
   {charts}
 </div>
 {legend_html}
-<div class="footer">Grok Elite Swing Model v3.0 &nbsp;·&nbsp; {date_fmt} &nbsp;·&nbsp; 資料來源：yfinance / Wikipedia &nbsp;·&nbsp; 僅供內部參考，不構成投資建議</div>
+<div class="footer">Grok Elite Swing Model v5.0 &nbsp;·&nbsp; {date_fmt} &nbsp;·&nbsp; 資料來源：yfinance / Wikipedia &nbsp;·&nbsp; 僅供內部參考，不構成投資建議</div>
 </body></html>'''
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# ④ 執行匯出：三個檔案（Top10 CSV / ALL CSV / HTML）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-if not records:
-    print('⚠️ 無資料可匯出')
-else:
-    # ── 建立 DataFrame ──────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════
+# ⑩ 匯出 CSV + HTML
+# ════════════════════════════════════════════════════════════════
+def export_results(records, price_data, macro):
+    if not records:
+        print('⚠️ 無資料可匯出')
+        return
+
     results_df = pd.DataFrame(records)
 
-    # ── 中文名 ──────────────────────────────────────────────────
+    # 補中文名
     results_df['CN_Name'] = results_df.apply(
-        lambda r: get_cn_name(r['Ticker'], r.get('Company_Name','')), axis=1
+        lambda r: get_cn_name(r['Ticker'], r.get('Company_Name', '')), axis=1
     )
 
-    # ── v3.2：單一評分來源 + tiebreaker 多鍵排序 ──────────────
-    results_df['風險等級'] = results_df['Grok_Elite_Score'].apply(
-        lambda s: risk_label(s)[0])
+    # 風險等級 + 排序
+    results_df['風險等級'] = results_df['New_Grok_Elite_Score'].apply(
+        lambda s: risk_label(s)[0]
+    )
     results_df = results_df.sort_values(
-        by=['Grok_Elite_Score', 'pullback_score', '1M_Return_pct', 'Volume_Ratio'],
+        by=['New_Grok_Elite_Score', 'PullbackQ_score', '1M_Return_pct', 'Volume_Ratio'],
         ascending=[False, False, False, False]
     ).reset_index(drop=True)
     results_df['Final_Rank'] = results_df.index + 1
     results_df['Rank']       = results_df['Final_Rank']
 
-    # ── top10 同步 ────────────────────────────────────────────────
     top10 = results_df.head(10).copy()
 
-    # ── export_cols（容錯）───────────────────────────────────────
+    # 控制台 Top 10 預覽
+    print('\n' + '=' * 90)
+    print('📋 Top 10 細化評分預覽：')
+    print('=' * 90)
+    preview_cols = [c for c in [
+        'Final_Rank', 'Ticker', 'CN_Name', 'New_Grok_Elite_Score',
+        'CB_score', 'PullbackQ_score', 'VS_score', 'RS_score', 'TC_score', 'Bonus_score',
+        '風險等級', 'Current_Price', '1M_Return_pct', 'RSI', 'Score_Breakdown'
+    ] if c in top10.columns]
+    print(top10[preview_cols].to_string(index=False))
+
     export_cols = [
-        'Final_Rank','Rank','Ticker','CN_Name','Grok_Elite_Score','pullback_score',
-        '風險等級','Company_Name','Current_Price','Market_Cap_B',
-        '1M_Return_pct','RSI','Volume_Ratio','EMA20','SMA50','MACD_Hist',
-        'High_20','Gap_Risk','TrendStrength_pts','Score_Breakdown','Reason'
+        'Final_Rank', 'Rank', 'Ticker', 'CN_Name', 'New_Grok_Elite_Score',
+        '風險等級', 'Company_Name', 'Current_Price', 'Market_Cap_B',
+        '1M_Return_pct', 'RSI', 'Volume_Ratio', 'EMA20', 'SMA50', 'MACD_Hist',
+        'High_20', 'Gap_Risk', 'Score_Breakdown', 'Reason',
+        'CB_score', 'PullbackQ_score', 'VS_score', 'RS_score', 'TC_score', 'Bonus_score',
+        'X_Catalyst_Score', 'X_Catalyst_Reason',
     ]
     safe_cols = [c for c in export_cols if c in results_df.columns]
 
-    # ── 檔案 1：Top 10 CSV ─────────────────────────────────────
+    # 檔案 1：Top 10 CSV
     f1 = f'Grok_Elite_Swing_Top10_{TODAY}.csv'
     top10[safe_cols].to_csv(f1, index=False, encoding='utf-8-sig')
-    print(f'✅ 檔案①：{f1}')
+    print(f'\n✅ 檔案①：{f1}')
 
-    # ── 檔案 2：全部篩選股 CSV ─────────────────────────────────
+    # 檔案 2：全部篩選股 CSV
     f2 = f'Grok_Elite_Swing_ALL_{TODAY}.csv'
     results_df[safe_cols].to_csv(f2, index=False, encoding='utf-8-sig')
     print(f'✅ 檔案②：{f2}（共 {len(results_df)} 檔）')
 
-
-    # ── 檔案 3：HTML 精美報告 ───────────────────────────────────
+    # 檔案 3：HTML 精美報告
     f3 = f'Grok_Elite_Swing_Report_{TODAY}.html'
-    print(f'\n⏳ 正在生成 HTML 報告（含 Top10 K 線圖）...')
-    html_content = generate_html_report(top10, results_df, price_data, TODAY, MACRO)
+    print(f'\n⏳ 正在生成 HTML 報告（含 Top 10 K 線圖）...')
+    html_content = generate_html_report(top10, results_df, price_data, TODAY, macro)
     with open(f3, 'w', encoding='utf-8') as fh:
         fh.write(html_content)
     print(f'✅ 檔案③：{f3}')
 
-    print('✅ 檔案產生完成')
+    print(f'\n🎉 完成！請在當前目錄取得以上三個檔案。')
 
-    # ── 預覽 ───────────────────────────────────────────────────
-    print('\n' + '='*90)
-    print('📋 Top 10 細化評分預覽：')
-    print('='*90)
-    preview_cols = [c for c in ['Final_Rank','Ticker','CN_Name','Grok_Elite_Score',
-                   'pullback_score','風險等級','Current_Price',
-                   '1M_Return_pct','RSI','Score_Breakdown'] if c in top10.columns]
-    print(top10[preview_cols].to_string(index=False))
+    # ── （選用）Google Drive 儲存 ─────────────────────────────
+    # 取消以下註解，並在 Colab 環境中執行即可自動儲存至 Drive
+    # from google.colab import drive
+    # import shutil
+    # drive.mount('/content/drive')
+    # GDRIVE_FOLDER = '/content/drive/MyDrive/GrokEliteSwing'
+    # os.makedirs(GDRIVE_FOLDER, exist_ok=True)
+    # for fname in [f1, f2, f3]:
+    #     shutil.copy(fname, os.path.join(GDRIVE_FOLDER, fname))
+    #     print(f'✅ 已儲存至 Google Drive：{fname}')
 
-# === code-summary ===
-if records:
+    return results_df, top10
+
+
+# ════════════════════════════════════════════════════════════════
+# ⑪ 統計摘要
+# ════════════════════════════════════════════════════════════════
+def print_summary(all_tickers, price_data, records, spy_ret_1m, qqq_ret_1m):
+    if not records:
+        return
     print('=' * 60)
     print(f'📊 今日執行摘要 — {datetime.today().strftime("%Y-%m-%d %H:%M")}')
     print('=' * 60)
     print(f'  股票池：{len(all_tickers)} 檔')
     print(f'  資料下載成功：{len(price_data)} 檔')
     print(f'  通過硬濾鏡：{len(records)} 檔')
-    print(f'  篩選率：{len(records)/len(price_data)*100:.1f}%')
+    print(f'  篩選率：{len(records) / len(price_data) * 100:.1f}%')
     print(f'  SPY 近 1M 報酬：{spy_ret_1m:.2%}')
     print(f'  QQQ 近 1M 報酬：{qqq_ret_1m:.2%}')
     print()
 
-    all_scores = [r['Grok_Elite_Score'] for r in records]
-    print(f'  評分分佈：')
+    all_scores = [r['New_Grok_Elite_Score'] for r in records]
+    print('  評分分佈：')
     print(f'    平均分：{np.mean(all_scores):.1f}')
     print(f'    中位數：{np.median(all_scores):.1f}')
-    print(f'    最高分：{max(all_scores):.1f}')
+    print(f'    最高分：{max(all_scores)}')
     print(f'    80+ 分：{sum(s >= 80 for s in all_scores)} 檔')
     print(f'    70+ 分：{sum(s >= 70 for s in all_scores)} 檔')
     print(f'    60+ 分：{sum(s >= 60 for s in all_scores)} 檔')
@@ -1310,7 +1156,6 @@ if records:
     print('✅ 本次篩選完成！建議將 CSV 上傳至 Grok 進行二次確認。')
     print('─' * 60)
 
-print('=== Grok Elite 分數已嚴格修正完成，所有加分皆為全有或全無 ===')
 
 # === 通知發送 ===
 import os, smtplib
@@ -1461,3 +1306,43 @@ if records:
     print('\n✅ 所有通知發送完畢')
 else:
     print('⚠️  無資料，跳過通知')
+
+
+# ════════════════════════════════════════════════════════════════
+# ⑫ 主程式入口
+# ════════════════════════════════════════════════════════════════
+def main():
+    # Step 1：建立股票池
+    all_tickers = build_ticker_list()
+
+    # Step 2：下載歷史資料
+    price_data, spy_ret_1m, qqq_ret_1m = download_all(all_tickers)
+
+    # Step 3：評分
+    records = run_scoring(price_data, spy_ret_1m, qqq_ret_1m)
+
+    if not records:
+        print('⚠️ 今日沒有股票通過硬濾鏡，請檢查資料或調整門檻。')
+        return
+
+    # Step 4：宏觀快照
+    print('\n📡 抓取宏觀數據...')
+    macro = fetch_macro()
+    print(
+        f"📡 宏觀 | Brent ${macro.get('brent','N/A')} {macro.get('brent_note','')} "
+        f"| SPY YTD {macro.get('spy_ytd','N/A')} 1M {macro.get('spy_1m','N/A')} "
+        f"| QQQ YTD {macro.get('qqq_ytd','N/A')} 1M {macro.get('qqq_1m','N/A')}"
+    )
+
+    # Step 5：匯出
+    results = export_results(records, price_data, macro)
+    if results is None:
+        return
+    results_df, top10 = results
+
+    # Step 6：統計摘要
+    print_summary(all_tickers, price_data, records, spy_ret_1m, qqq_ret_1m)
+
+
+if __name__ == '__main__':
+    main()
