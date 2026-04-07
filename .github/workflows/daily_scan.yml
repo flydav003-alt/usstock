@@ -23,7 +23,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install yfinance pandas numpy requests plotly lxml beautifulsoup4
-
+          pip install yfinance pandas pandas_ta numpy requests plotly
       - name: Run scan
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
