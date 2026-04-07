@@ -1123,7 +1123,7 @@ def export_results(records, price_data, macro):
     #     shutil.copy(fname, os.path.join(GDRIVE_FOLDER, fname))
     #     print(f'✅ 已儲存至 Google Drive：{fname}')
 
-    return results_df, top10
+    return results_df, top10, f1, f2, f3
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1176,7 +1176,7 @@ def build_telegram_message(top10_df, today_str, macro):
         rk  = int(r.get('Final_Rank', r.get('Rank', 0)))
         tk  = r['Ticker']
         cn  = r.get('CN_Name', '')
-        sc  = r['Grok_Elite_Score']
+        sc  = r['New_Grok_Elite_Score']
         risk= r.get('風險等級', '')
         ret = r.get('1M_Return_pct', 0)
         vr  = r.get('Volume_Ratio', 0)
@@ -1221,7 +1221,7 @@ def build_email_html(top10_df, today_str, macro, gh_url=''):
         rk  = int(r.get('Final_Rank', r.get('Rank', 0)))
         tk  = r['Ticker']
         cn  = r.get('CN_Name', '')
-        sc  = r['Grok_Elite_Score']
+        sc  = r['New_Grok_Elite_Score']
         risk= r.get('風險等級', '')
         ret = r.get('1M_Return_pct', 0)
         pr  = r.get('Current_Price', 0)
@@ -1294,18 +1294,7 @@ def send_email(subject, html_body, attachments=None):
         print(f'❌ Email 失敗：{e}')
 
 
-# ── 執行發送 ────────────────────────────────────────────────────
-if records:
-    gh_url = os.environ.get('PAGES_URL', '')
-    send_telegram(build_telegram_message(top10, TODAY_STR, MACRO))
-    send_email(
-        subject     = f'📊 Grok Elite Swing Top10 — {TODAY_STR}',
-        html_body   = build_email_html(top10, TODAY_STR, MACRO, gh_url),
-        attachments = [f1, f2, f3]
-    )
-    print('\n✅ 所有通知發送完畢')
-else:
-    print('⚠️  無資料，跳過通知')
+
 
 
 # ════════════════════════════════════════════════════════════════
@@ -1338,10 +1327,20 @@ def main():
     results = export_results(records, price_data, macro)
     if results is None:
         return
-    results_df, top10 = results
+    results_df, top10, f1, f2, f3 = results
 
     # Step 6：統計摘要
     print_summary(all_tickers, price_data, records, spy_ret_1m, qqq_ret_1m)
+
+    # Step 7：發送通知
+    gh_url = os.environ.get('PAGES_URL', '')
+    send_telegram(build_telegram_message(top10, TODAY_STR, macro))
+    send_email(
+        subject     = f'📊 Grok Elite Swing Top10 — {TODAY_STR}',
+        html_body   = build_email_html(top10, TODAY_STR, macro, gh_url),
+        attachments = [f1, f2, f3]
+    )
+    print('\n✅ 所有通知發送完畢')
 
 
 if __name__ == '__main__':
