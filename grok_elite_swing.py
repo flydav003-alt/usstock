@@ -931,7 +931,8 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
         f'</div>'
     )
 
-    return f"""<!DOCTYPE html>
+    # 用純 .format() 插值，CSS 內所有 {} 保持單括號
+    TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
@@ -939,44 +940,44 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
 <title>Grok Elite Swing · {date_fmt}</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <style>
-*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
-html{{font-size:14px;scroll-behavior:smooth}}
-body{{font-family:'Noto Sans TC',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding-bottom:80px}}
-.header{{background:linear-gradient(160deg,#0d1117 0%,#161b22 55%,#0d1117 100%);border-bottom:1px solid #21262d;padding:0}}
-.hi{{max-width:1440px;margin:0 auto;padding:22px 36px 0}}
-.brand{{font-size:.75em;color:#58a6ff;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-bottom:5px}}
-.htitle{{font-size:1.8em;font-weight:900;color:#E5E5EA;letter-spacing:-.02em;margin-bottom:14px}}
-.htitle span{{color:#FFD60A}}
-.hmeta{{display:flex;flex-wrap:wrap;gap:6px;font-size:.76em;color:#58a6ff;margin-bottom:22px}}
-.hmeta span{{background:#21262d;padding:3px 10px;border-radius:4px;border:1px solid #30363d}}
-.stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;max-width:1440px;margin:0 auto;padding:0 36px 22px}}
-.card{{background:#161b22;border:1px solid #21262d;border-radius:11px;padding:17px 20px;transition:border-color .2s}}
-.card:hover{{border-color:#30363d}}
-.card.gold{{border-color:#FFD60A55}}
-.clabel{{font-size:.7em;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:.09em;margin-bottom:7px}}
-.cval{{font-size:1.65em;font-weight:800;color:#E5E5EA;line-height:1;margin-bottom:3px}}
-.card.gold .cval{{color:#FFD60A}}
-.csub{{font-size:.7em;color:#8b949e}}
-.macrobar{{max-width:1440px;margin:0 auto;padding:12px 36px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;background:#0d1117;border-bottom:1px solid #21262d}}
-.mbi{{background:#161b22;border:1px solid #21262d;border-radius:9px;padding:10px 16px;display:flex;flex-direction:column;gap:3px}}
-.mbl{{font-size:.67em;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#8b949e}}
-.mbv{{font-size:1.05em;font-weight:800;color:#E5E5EA;line-height:1.2}}
-.mbn{{font-size:.72em;color:#636366;line-height:1.4}}
-.sec{{max-width:1440px;margin:0 auto;padding:32px 36px 0}}
-.sechead{{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #21262d}}
-.sectl{{font-size:1.05em;font-weight:800;color:#E5E5EA}}
-.secbadge{{background:#21262d;color:#8b949e;padding:2px 10px;border-radius:20px;font-size:.73em;vertical-align:middle;margin-left:6px}}
-.secdesc{{font-size:.77em;color:#8b949e;margin-top:5px}}
-.leg{{display:flex;gap:14px;flex-wrap:wrap;font-size:.74em;color:#8b949e;margin-top:8px}}
-.ldot{{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}}
-.twrap{{overflow-x:auto;border:1px solid #21262d;border-radius:12px;background:#161b22}}
-table{{width:100%;border-collapse:collapse;font-size:.87em}}
-thead tr{{background:#1c2128;border-bottom:2px solid #30363d}}
-th{{padding:11px 8px;text-align:left;font-weight:700;color:#8b949e;font-size:.79em;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap}}
-td{{border-bottom:1px solid #1c2128}}
-tr:last-child td{{border-bottom:none}}
-tr:hover td{{background:rgba(56,139,253,.04)}}
-.footer{{text-align:center;padding:44px 36px 20px;color:#484f58;font-size:.73em;border-top:1px solid #21262d;margin-top:48px;max-width:1440px;margin-left:auto;margin-right:auto}}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:14px;scroll-behavior:smooth}
+body{font-family:'Noto Sans TC',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding-bottom:80px}
+.header{background:linear-gradient(160deg,#0d1117 0%,#161b22 55%,#0d1117 100%);border-bottom:1px solid #21262d;padding:0}
+.hi{max-width:1440px;margin:0 auto;padding:22px 36px 0}
+.brand{font-size:.75em;color:#58a6ff;font-weight:600;letter-spacing:.18em;text-transform:uppercase;margin-bottom:5px}
+.htitle{font-size:1.8em;font-weight:900;color:#E5E5EA;letter-spacing:-.02em;margin-bottom:14px}
+.htitle span{color:#FFD60A}
+.hmeta{display:flex;flex-wrap:wrap;gap:6px;font-size:.76em;color:#58a6ff;margin-bottom:22px}
+.hmeta span{background:#21262d;padding:3px 10px;border-radius:4px;border:1px solid #30363d}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;max-width:1440px;margin:0 auto;padding:0 36px 22px}
+.card{background:#161b22;border:1px solid #21262d;border-radius:11px;padding:17px 20px;transition:border-color .2s}
+.card:hover{border-color:#30363d}
+.card.gold{border-color:#FFD60A55}
+.clabel{font-size:.7em;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:.09em;margin-bottom:7px}
+.cval{font-size:1.65em;font-weight:800;color:#E5E5EA;line-height:1;margin-bottom:3px}
+.card.gold .cval{color:#FFD60A}
+.csub{font-size:.7em;color:#8b949e}
+.macrobar{max-width:1440px;margin:0 auto;padding:12px 36px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px;background:#0d1117;border-bottom:1px solid #21262d}
+.mbi{background:#161b22;border:1px solid #21262d;border-radius:9px;padding:10px 16px;display:flex;flex-direction:column;gap:3px}
+.mbl{font-size:.67em;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#8b949e}
+.mbv{font-size:1.05em;font-weight:800;color:#E5E5EA;line-height:1.2}
+.mbn{font-size:.72em;color:#636366;line-height:1.4}
+.sec{max-width:1440px;margin:0 auto;padding:32px 36px 0}
+.sechead{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #21262d}
+.sectl{font-size:1.05em;font-weight:800;color:#E5E5EA}
+.secbadge{background:#21262d;color:#8b949e;padding:2px 10px;border-radius:20px;font-size:.73em;vertical-align:middle;margin-left:6px}
+.secdesc{font-size:.77em;color:#8b949e;margin-top:5px}
+.leg{display:flex;gap:14px;flex-wrap:wrap;font-size:.74em;color:#8b949e;margin-top:8px}
+.ldot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:4px;vertical-align:middle}
+.twrap{overflow-x:auto;border:1px solid #21262d;border-radius:12px;background:#161b22}
+table{width:100%;border-collapse:collapse;font-size:.87em}
+thead tr{background:#1c2128;border-bottom:2px solid #30363d}
+th{padding:11px 8px;text-align:left;font-weight:700;color:#8b949e;font-size:.79em;text-transform:uppercase;letter-spacing:.07em;white-space:nowrap}
+td{border-bottom:1px solid #1c2128}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(56,139,253,.04)}
+.footer{text-align:center;padding:44px 36px 20px;color:#484f58;font-size:.73em;border-top:1px solid #21262d;margin-top:48px;max-width:1440px;margin-left:auto;margin-right:auto}
 </style>
 </head>
 <body>
@@ -1031,7 +1032,7 @@ tr:hover td{{background:rgba(56,139,253,.04)}}
           <th style="width:36px;text-align:center;white-space:nowrap">Gap</th>
         </tr>
       </thead>
-      <tbody>{{rows}}</tbody>
+      <tbody>{rows}</tbody>
     </table>
   </div>
 </div>
@@ -1042,11 +1043,24 @@ tr:hover td{{background:rgba(56,139,253,.04)}}
       <div class="secdesc">最近 80 個交易日 · 深色模式 · Plotly 互動（可縮放 / 拖曳）</div>
     </div>
   </div>
-  {{charts}}
+  {charts}
 </div>
-{{legend_html}}
+{legend_html}
 <div class="footer">Grok Elite Swing Model v5.0 &nbsp;·&nbsp; {date_fmt} &nbsp;·&nbsp; 資料來源：yfinance / Wikipedia &nbsp;·&nbsp; 僅供內部參考，不構成投資建議</div>
-</body></html>""".format(rows=rows, charts=charts, legend_html=legend_html)
+</body></html>"""
+
+    return TEMPLATE.format(
+        date_fmt=date_fmt,
+        n_scan=n_scan,
+        n_pass=n_pass,
+        t1_tick=t1_tick,
+        t1_cn=t1_cn,
+        t1_score=t1_score,
+        macrobar_html=macrobar_html,
+        rows=rows,
+        charts=charts,
+        legend_html=legend_html,
+    )
 
 
 # ════════════════════════════════════════════════════════════════
