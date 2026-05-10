@@ -1,19 +1,35 @@
 name: Grok Elite Swing
 
 on:
+  # ── 定時排程：美東週二~週六 UTC 02:17（= 美東前日 22:17，收盤後約2小時）──
   schedule:
-  - cron: '17 02 * * 2-6'
+    - cron: '17 02 * * 2-6'
+
+  # ── 手動觸發 ──
   workflow_dispatch:
+
+  # ── 接收外部 dispatch（預留，目前不主動使用）──
+  repository_dispatch:
+    types:
+      - manual-trigger
+
+# 同一時間只跑一個，不取消進行中的
+concurrency:
+  group: grok-elite-swing
+  cancel-in-progress: false
 
 jobs:
   run-scan:
+    name: 執行掃描 → 推 CSV → 通知台股 Repo
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
+      # ── 1. Checkout 美股 Repo ──
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ── 2. Python 環境 ──
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -23,46 +39,92 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install yfinance pandas numpy requests plotly lxml beautifulsoup4 ta
+
+      # ── 3. 執行掃描 ──
       - name: Run scan
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_RECIPIENTS:   ${{ secrets.EMAIL_RECIPIENTS }}
           PAGES_URL:          ${{ secrets.PAGES_URL }}
         run: python grok_elite_swing.py
 
-      - name: Update GitHub Pages
+      # ── 4. 更新美股 Repo 自己的 GitHub Pages ──
+      - name: Update GitHub Pages (本 Repo)
         run: |
-          HTML_FILE=$(ls Grok_Elite_Swing_Report_*.html 2>/dev/null | head -1)
-          if [ -n "$HTML_FILE" ]; then
-            mkdir -p docs
-            cp "$HTML_FILE" docs/index.html
-          fi
-
-      - name: Update Web and Clean History
-        run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # 1. 處理網頁檔案：確保 docs 存在，並將今日報表轉為 index.html
+
           mkdir -p docs
           HTML_FILE=$(ls Grok_Elite_Swing_Report_*.html 2>/dev/null | head -1)
           if [ -n "$HTML_FILE" ]; then
             cp "$HTML_FILE" docs/index.html
           fi
-          
-          # 2. 徹底清理：從 GitHub 紀錄中移除所有具備日期檔名的 CSV 和 HTML
-          # 使用 git rm 會同步刪除實體檔案並標記為「不再追蹤」
-          git rm Grok_Elite_Swing_*.csv || true
-          git rm Grok_Elite_Swing_Report_*.html || true
-          
-          # 3. 唯獨加回 index.html，確保網頁佈告欄有東西顯示
+
+          # 清理帶日期的暫存檔，只保留 docs/index.html
+          git rm --cached Grok_Elite_Swing_Report_*.html 2>/dev/null || true
+          git rm --cached us_*.csv 2>/dev/null || true
+
           git add docs/index.html
-          
-          # 4. 提交與推送
-          git diff --staged --quiet || git commit -m "Update Daily Report & Auto Clean"
+          git diff --staged --quiet || git commit -m "Update Daily Report [skip ci]"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 5. 把 us_YYYYMMDD.csv 推到台股 Repo 的 data/input/ ──
+      - name: Push CSV to Taiwan Repo
+        env:
+          GH_PAT:      ${{ secrets.GH_PAT }}
+          TARGET_REPO: ${{ secrets.TARGET_REPO }}
+        run: |
+          CSV_FILE=$(ls us_*.csv 2>/dev/null | head -1)
+          if [ -z "$CSV_FILE" ]; then
+            echo "❌ 找不到 CSV 檔案，跳過推送"
+            exit 1
+          fi
+          echo "✅ 找到 CSV：$CSV_FILE"
+
+          # Clone 台股 Repo（只取最近一層）
+          git clone --depth=1 "https://x-access-token:${GH_PAT}@github.com/${TARGET_REPO}.git" target_repo
+          cd target_repo
+
+          # 確保目標目錄存在
+          mkdir -p data/input
+
+          # 複製 CSV（覆蓋舊檔，只保留最新一份，刪除同前綴舊檔）
+          rm -f data/input/us_*.csv
+          cp "../$CSV_FILE" "data/input/$CSV_FILE"
+
+          # Commit & Push
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "data/input/$CSV_FILE"
+          if git diff --staged --quiet; then
+            echo "CSV 無變動，跳過 commit"
+          else
+            git commit -m "🤖 更新美股 CSV：$CSV_FILE [skip ci]"
+            git push
+            echo "✅ CSV 推送完成：$CSV_FILE → ${TARGET_REPO}/data/input/"
+          fi
+
+      # ── 6. 發送 repository_dispatch 給台股 Repo 觸發評分 ──
+      - name: Notify Taiwan Repo (repository_dispatch)
+        env:
+          GH_PAT:      ${{ secrets.GH_PAT }}
+          TARGET_REPO: ${{ secrets.TARGET_REPO }}
+        run: |
+          CSV_FILE=$(ls us_*.csv 2>/dev/null | head -1)
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_PAT}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${TARGET_REPO}/dispatches" \
+            -d "{\"event_type\":\"csv-us-updated\",\"client_payload\":{\"csv_file\":\"${CSV_FILE}\"}}")
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "✅ repository_dispatch 發送成功（csv-us-updated）"
+          else
+            echo "❌ repository_dispatch 失敗，HTTP code: $HTTP_CODE"
+            exit 1
+          fi
