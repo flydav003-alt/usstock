@@ -931,16 +931,8 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
         f'</div>'
     )
 
-    # 用純 .format() 插值，CSS 內所有 {} 保持單括號
-    TEMPLATE = """<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Grok Elite Swing · {date_fmt}</title>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
-<style>
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    # CSS 區塊獨立存放，不經過任何插值
+    CSS = """*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px;scroll-behavior:smooth}
 body{font-family:'Noto Sans TC',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding-bottom:80px}
 .header{background:linear-gradient(160deg,#0d1117 0%,#161b22 55%,#0d1117 100%);border-bottom:1px solid #21262d;padding:0}
@@ -977,90 +969,89 @@ th{padding:11px 8px;text-align:left;font-weight:700;color:#8b949e;font-size:.79e
 td{border-bottom:1px solid #1c2128}
 tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(56,139,253,.04)}
-.footer{text-align:center;padding:44px 36px 20px;color:#484f58;font-size:.73em;border-top:1px solid #21262d;margin-top:48px;max-width:1440px;margin-left:auto;margin-right:auto}
-</style>
-</head>
-<body>
-<div class="header">
-  <div class="hi">
-    <div class="brand">Grok Elite Swing &nbsp;·&nbsp; 機密報告</div>
-    <h1 class="htitle">Grok Elite Swing v5.0 — <span>{date_fmt}</span> 收盤後分析</h1>
-    <div class="hmeta">
-      <span>📡 S&amp;P 500 + Nasdaq 100</span>
-      <span>⏱ 7-14 天波段策略</span>
-      <span>📊 yfinance · 免費資料源</span>
-      <span>⚠️ 僅供參考，不構成投資建議</span>
-    </div>
-  </div>
-  <div class="stats">
-    <div class="card"><div class="clabel">掃描標的</div><div class="cval">{n_scan}</div><div class="csub">S&amp;P500 + Nasdaq100</div></div>
-    <div class="card"><div class="clabel">通過篩選</div><div class="cval" style="color:#30D158">{n_pass}</div><div class="csub">前30名（硬濾鏡通過後）</div></div>
-    <div class="card gold"><div class="clabel">今日 Top 1</div><div class="cval">{t1_tick}</div><div class="csub">{t1_cn} · 細化評分 {t1_score}</div></div>
-    <div class="card"><div class="clabel">報告日期</div><div class="cval" style="font-size:1.15em">{date_fmt}</div><div class="csub">收盤後分析</div></div>
-    <div class="card"><div class="clabel">持倉週期</div><div class="cval" style="font-size:1.2em">7-14天</div><div class="csub">波段策略</div></div>
-  </div>
-</div>
-{macrobar_html}
-<div class="sec">
-  <div class="sechead">
-    <div>
-      <div class="sectl">🔥 完整排行榜 <span class="secbadge">前30名</span></div>
-      <div class="secdesc">硬濾鏡：市值 &gt;$10B · 股價 &gt;$10 · 日均量 &gt;100萬 · 1M漲幅 &gt;8% · 站上 EMA20 &amp; SMA50</div>
-      <div class="leg">
-        <span><span class="ldot" style="background:#30D158"></span>80+ 低風險</span>
-        <span><span class="ldot" style="background:#FF9F0A"></span>65-79 中風險</span>
-        <span><span class="ldot" style="background:#FF6B35"></span>55-64 中高風險</span>
-        <span><span class="ldot" style="background:#FF453A"></span>&lt;55 高風險</span>
-      </div>
-    </div>
-  </div>
-  <div class="twrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align:center;width:44px">排行</th>
-          <th style="width:70px">代碼</th>
-          <th style="min-width:130px">名稱／產業</th>
-          <th style="min-width:155px">細化評分／風險</th>
-          <th style="text-align:right;white-space:nowrap">收盤價</th>
-          <th style="text-align:right;white-space:nowrap">市值</th>
-          <th style="text-align:center;white-space:nowrap">1M漲幅</th>
-          <th style="text-align:center;width:52px">RSI</th>
-          <th style="text-align:center;width:58px">量比</th>
-          <th style="min-width:135px">細化分項</th>
-          <th style="min-width:190px">關鍵理由</th>
-          <th style="width:36px;text-align:center;white-space:nowrap">Gap</th>
-        </tr>
-      </thead>
-      <tbody>{rows}</tbody>
-    </table>
-  </div>
-</div>
-<div class="sec" style="padding-top:36px">
-  <div class="sechead">
-    <div>
-      <div class="sectl">📊 Top 10 K 線圖 <span class="secbadge">EMA20 橙 · SMA50 藍 · RSI · MACD</span></div>
-      <div class="secdesc">最近 80 個交易日 · 深色模式 · Plotly 互動（可縮放 / 拖曳）</div>
-    </div>
-  </div>
-  {charts}
-</div>
-{legend_html}
-<div class="footer">Grok Elite Swing Model v5.0 &nbsp;·&nbsp; {date_fmt} &nbsp;·&nbsp; 資料來源：yfinance / Wikipedia &nbsp;·&nbsp; 僅供內部參考，不構成投資建議</div>
-</body></html>"""
+.footer{text-align:center;padding:44px 36px 20px;color:#484f58;font-size:.73em;border-top:1px solid #21262d;margin-top:48px;max-width:1440px;margin-left:auto;margin-right:auto}"""
 
-    return TEMPLATE.format(
-        date_fmt=date_fmt,
-        n_scan=n_scan,
-        n_pass=n_pass,
-        t1_tick=t1_tick,
-        t1_cn=t1_cn,
-        t1_score=t1_score,
-        macrobar_html=macrobar_html,
-        rows=rows,
-        charts=charts,
-        legend_html=legend_html,
+    # HTML 用字串串接，完全不呼叫 .format()，CSS 從上方直接嵌入
+    html = (
+        '<!DOCTYPE html>\n'
+        '<html lang="zh-TW">\n'
+        '<head>\n'
+        '<meta charset="UTF-8">\n'
+        '<meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
+        '<title>Grok Elite Swing \u00b7 ' + date_fmt + '</title>\n'
+        '<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&display=swap" rel="stylesheet">\n'
+        '<style>\n' + CSS + '\n</style>\n'
+        '</head>\n'
+        '<body>\n'
+        '<div class="header">\n'
+        '  <div class="hi">\n'
+        '    <div class="brand">Grok Elite Swing &nbsp;\u00b7&nbsp; \u6a5f\u5bc6\u5831\u544a</div>\n'
+        '    <h1 class="htitle">Grok Elite Swing v5.0 \u2014 <span>' + date_fmt + '</span> \u6536\u76e4\u5f8c\u5206\u6790</h1>\n'
+        '    <div class="hmeta">\n'
+        '      <span>\ud83d\udce1 S&amp;P 500 + Nasdaq 100</span>\n'
+        '      <span>\u23f1 7-14 \u5929\u6ce2\u6bb5\u7b56\u7565</span>\n'
+        '      <span>\ud83d\udcca yfinance \u00b7 \u514d\u8cbb\u8cc7\u6599\u6e90</span>\n'
+        '      <span>\u26a0\ufe0f \u50c5\u4f9b\u53c3\u8003\uff0c\u4e0d\u69cb\u6210\u6295\u8cc7\u5efa\u8b70</span>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  <div class="stats">\n'
+        '    <div class="card"><div class="clabel">\u6383\u63cf\u6a19\u7684</div><div class="cval">' + str(n_scan) + '</div><div class="csub">S&amp;P500 + Nasdaq100</div></div>\n'
+        '    <div class="card"><div class="clabel">\u901a\u904e\u7be9\u9078</div><div class="cval" style="color:#30D158">' + str(n_pass) + '</div><div class="csub">\u524d30\u540d\uff08\u786c\u6fc3\u93e1\u901a\u904e\u5f8c\uff09</div></div>\n'
+        '    <div class="card gold"><div class="clabel">\u4eca\u65e5 Top 1</div><div class="cval">' + str(t1_tick) + '</div><div class="csub">' + str(t1_cn) + ' \u00b7 \u7d30\u5316\u8a55\u5206 ' + str(t1_score) + '</div></div>\n'
+        '    <div class="card"><div class="clabel">\u5831\u544a\u65e5\u671f</div><div class="cval" style="font-size:1.15em">' + date_fmt + '</div><div class="csub">\u6536\u76e4\u5f8c\u5206\u6790</div></div>\n'
+        '    <div class="card"><div class="clabel">\u6301\u502a\u9031\u671f</div><div class="cval" style="font-size:1.2em">7-14\u5929</div><div class="csub">\u6ce2\u6bb5\u7b56\u7565</div></div>\n'
+        '  </div>\n'
+        '</div>\n'
+        + macrobar_html + '\n'
+        '<div class="sec">\n'
+        '  <div class="sechead">\n'
+        '    <div>\n'
+        '      <div class="sectl">\ud83d\udd25 \u5b8c\u6574\u6392\u884c\u699c <span class="secbadge">\u524d30\u540d</span></div>\n'
+        '      <div class="secdesc">\u786c\u6fc3\u93e1\uff1a\u5e02\u5024 &gt;$10B \u00b7 \u80a1\u50f9 &gt;$10 \u00b7 \u65e5\u5747\u91cf &gt;100\u842c \u00b7 1M\u6f32\u5e45 &gt;8% \u00b7 \u7ad9\u4e0a EMA20 &amp; SMA50</div>\n'
+        '      <div class="leg">\n'
+        '        <span><span class="ldot" style="background:#30D158"></span>80+ \u4f4e\u98a8\u96aa</span>\n'
+        '        <span><span class="ldot" style="background:#FF9F0A"></span>65-79 \u4e2d\u98a8\u96aa</span>\n'
+        '        <span><span class="ldot" style="background:#FF6B35"></span>55-64 \u4e2d\u9ad8\u98a8\u96aa</span>\n'
+        '        <span><span class="ldot" style="background:#FF453A"></span>&lt;55 \u9ad8\u98a8\u96aa</span>\n'
+        '      </div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        '  <div class="twrap">\n'
+        '    <table>\n'
+        '      <thead>\n'
+        '        <tr>\n'
+        '          <th style="text-align:center;width:44px">\u6392\u884c</th>\n'
+        '          <th style="width:70px">\u4ee3\u78bc</th>\n'
+        '          <th style="min-width:130px">\u540d\u7a31\uff0f\u7522\u696d</th>\n'
+        '          <th style="min-width:155px">\u7d30\u5316\u8a55\u5206\uff0f\u98a8\u96aa</th>\n'
+        '          <th style="text-align:right;white-space:nowrap">\u6536\u76e4\u50f9</th>\n'
+        '          <th style="text-align:right;white-space:nowrap">\u5e02\u5024</th>\n'
+        '          <th style="text-align:center;white-space:nowrap">1M\u6f32\u5e45</th>\n'
+        '          <th style="text-align:center;width:52px">RSI</th>\n'
+        '          <th style="text-align:center;width:58px">\u91cf\u6bd4</th>\n'
+        '          <th style="min-width:135px">\u7d30\u5316\u5206\u9805</th>\n'
+        '          <th style="min-width:190px">\u95dc\u9375\u7406\u7531</th>\n'
+        '          <th style="width:36px;text-align:center;white-space:nowrap">Gap</th>\n'
+        '        </tr>\n'
+        '      </thead>\n'
+        '      <tbody>' + rows + '</tbody>\n'
+        '    </table>\n'
+        '  </div>\n'
+        '</div>\n'
+        '<div class="sec" style="padding-top:36px">\n'
+        '  <div class="sechead">\n'
+        '    <div>\n'
+        '      <div class="sectl">\ud83d\udcca Top 10 K \u7dda\u5716 <span class="secbadge">EMA20 \u6a59 \u00b7 SMA50 \u85cd \u00b7 RSI \u00b7 MACD</span></div>\n'
+        '      <div class="secdesc">\u6700\u8fd1 80 \u500b\u4ea4\u6613\u65e5 \u00b7 \u6df1\u8272\u6a21\u5f0f \u00b7 Plotly \u4e92\u52d5\uff08\u53ef\u7e2e\u653e / \u62d6\u66f3\uff09</div>\n'
+        '    </div>\n'
+        '  </div>\n'
+        + charts + '\n'
+        '</div>\n'
+        + legend_html + '\n'
+        '<div class="footer">Grok Elite Swing Model v5.0 &nbsp;\u00b7&nbsp; ' + date_fmt + ' &nbsp;\u00b7&nbsp; \u8cc7\u6599\u4f86\u6e90\uff1ayfinance / Wikipedia &nbsp;\u00b7&nbsp; \u50c5\u4f9b\u5167\u90e8\u53c3\u8003\uff0c\u4e0d\u69cb\u6210\u6295\u8cc7\u5efa\u8b70</div>\n'
+        '</body></html>'
     )
+    return html
 
 
 # ════════════════════════════════════════════════════════════════
