@@ -39,6 +39,16 @@ print(f'✅ 套件載入完成 | 執行日期：{TODAY}')
 
 
 # ════════════════════════════════════════════════════════════════
+# 工具函式：清除 surrogate 字元
+# ════════════════════════════════════════════════════════════════
+def _clean_str(s):
+    """移除字串中的 surrogate 字元，避免 UnicodeEncodeError"""
+    if not isinstance(s, str):
+        s = str(s) if s is not None else ''
+    return s.encode('utf-8', errors='replace').decode('utf-8')
+
+
+# ════════════════════════════════════════════════════════════════
 # ② 抓取 S&P 500 + Nasdaq 100 成分股清單
 # ════════════════════════════════════════════════════════════════
 WIKI_HEADERS = {
@@ -377,7 +387,8 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         try:
             info         = yf.Ticker(ticker).fast_info
             market_cap   = float(getattr(info, 'market_cap', float('nan')) or float('nan'))
-            company_name = getattr(yf.Ticker(ticker).info, 'shortName', ticker) or ticker
+            raw_name     = getattr(yf.Ticker(ticker).info, 'shortName', ticker) or ticker
+            company_name = _clean_str(raw_name)
         except Exception:
             pass
 
@@ -682,7 +693,7 @@ def create_kline_plotly(ticker, df_raw, rank, score, cn_name, signal_text=''):
 
 
 # ════════════════════════════════════════════════════════════════
-# ⑧ HTML 報告輔助函式（與原版完全相同）
+# ⑧ HTML 報告輔助函式
 # ════════════════════════════════════════════════════════════════
 def sc_color(s):
     if s >= 80: return '#30D158'
@@ -745,7 +756,6 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
     if macro is None:
         macro = {}
 
-    # 前10 用於 K 線圖
     top10_df = top30_df.head(10)
 
     n_scan   = len(pdata)
@@ -767,8 +777,8 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
         rt    = float(r.get('1M_Return_pct', 0) or 0)
         rs    = float(r.get('RSI', 0) or 0)
         vr    = float(r.get('Volume_Ratio', 0) or 0)
-        bd    = str(r.get('Score_Breakdown', '')).replace('|', '·')
-        re_   = str(r.get('Reason', ''))
+        bd    = _clean_str(str(r.get('Score_Breakdown', ''))).replace('|', '·')
+        re_   = _clean_str(str(r.get('Reason', '')))
         gap_r = str(r.get('Gap_Risk', '低'))
         sec   = get_sector(tk)
         rlv, rc = risk_label(sc)
@@ -810,7 +820,6 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
             f'{gap_r}</span></td></tr>'
         )
 
-    # K 線圖只畫前10
     charts = ''
     print('  生成 Top10 K 線圖中...')
     for idx, (_, r) in enumerate(top10_df.iterrows()):
@@ -818,7 +827,7 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
         rk       = int(r.get('Rank', idx + 1))
         sc       = int(r.get('New_Grok_Elite_Score', 40) or 40)
         cn       = get_cn_name(tk, r.get('Company_Name', ''))
-        bd       = str(r.get('Score_Breakdown', ''))
+        bd       = _clean_str(str(r.get('Score_Breakdown', '')))
         pr       = float(r.get('Current_Price', 0) or 0)
         rt       = float(r.get('1M_Return_pct', 0) or 0)
         ema20_v  = float(r.get('EMA20', 0) or 0)
@@ -931,7 +940,6 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
         f'</div>'
     )
 
-    # CSS 區塊獨立存放，不經過任何插值
     CSS = """*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{font-size:14px;scroll-behavior:smooth}
 body{font-family:'Noto Sans TC',system-ui,sans-serif;background:#0d1117;color:#c9d1d9;padding-bottom:80px}
@@ -971,7 +979,6 @@ tr:last-child td{border-bottom:none}
 tr:hover td{background:rgba(56,139,253,.04)}
 .footer{text-align:center;padding:44px 36px 20px;color:#484f58;font-size:.73em;border-top:1px solid #21262d;margin-top:48px;max-width:1440px;margin-left:auto;margin-right:auto}"""
 
-    # HTML 用字串串接，完全不呼叫 .format()，CSS 從上方直接嵌入
     html = (
         '<!DOCTYPE html>\n'
         '<html lang="zh-TW">\n'
@@ -1055,7 +1062,7 @@ tr:hover td{background:rgba(56,139,253,.04)}
 
 
 # ════════════════════════════════════════════════════════════════
-# ⑩ 匯出 CSV（只出前30名，檔名 us_YYYYMMDD.csv）+ HTML
+# ⑩ 匯出 CSV + HTML
 # ════════════════════════════════════════════════════════════════
 def export_results(records, price_data, macro):
     if not records:
@@ -1064,12 +1071,10 @@ def export_results(records, price_data, macro):
 
     results_df = pd.DataFrame(records)
 
-    # 補中文名
     results_df['CN_Name'] = results_df.apply(
         lambda r: get_cn_name(r['Ticker'], r.get('Company_Name', '')), axis=1
     )
 
-    # 風險等級 + 排序
     results_df['風險等級'] = results_df['New_Grok_Elite_Score'].apply(
         lambda s: risk_label(s)[0]
     )
@@ -1080,10 +1085,8 @@ def export_results(records, price_data, macro):
     results_df['Final_Rank'] = results_df.index + 1
     results_df['Rank']       = results_df['Final_Rank']
 
-    # ── 只取前30名 ──
     top30 = results_df.head(30).copy()
 
-    # 控制台 Top10 預覽
     print('\n' + '=' * 90)
     print('📋 Top 10 細化評分預覽：')
     print('=' * 90)
@@ -1104,17 +1107,18 @@ def export_results(records, price_data, macro):
     ]
     safe_cols = [c for c in export_cols if c in top30.columns]
 
-    # ── 唯一 CSV：前30名，檔名 us_YYYYMMDD.csv ──
     csv_filename = f'us_{TODAY}.csv'
     top30[safe_cols].to_csv(csv_filename, index=False, encoding='utf-8-sig')
     print(f'\n✅ CSV 輸出：{csv_filename}（前30名，共 {len(top30)} 筆）')
 
-    # ── HTML 精美報告（排行榜前30 + K線前10）──
     html_filename = f'Grok_Elite_Swing_Report_{TODAY}.html'
     print(f'\n⏳ 正在生成 HTML 報告（前30排行榜 + Top10 K 線圖）...')
     html_content = generate_html_report(top30, price_data, TODAY, macro)
+
+    # ── 修正：寫入前清除 surrogate 字元，避免 UnicodeEncodeError ──
+    html_clean = html_content.encode('utf-8', errors='replace').decode('utf-8')
     with open(html_filename, 'w', encoding='utf-8') as fh:
-        fh.write(html_content)
+        fh.write(html_clean)
     print(f'✅ HTML 輸出：{html_filename}')
 
     print(f'\n🎉 完成！')
@@ -1152,7 +1156,7 @@ def print_summary(all_tickers, price_data, records, spy_ret_1m, qqq_ret_1m):
 
 
 # ════════════════════════════════════════════════════════════════
-# ⑫ Email 通知（Telegram 已移除，刪除 Secrets 即可停用）
+# ⑫ Email 通知
 # ════════════════════════════════════════════════════════════════
 import smtplib
 from email.mime.multipart import MIMEMultipart
