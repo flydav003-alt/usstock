@@ -50,6 +50,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/input/"$CSV_FILE"
+          git diff --staged --quiet && echo "⏭️ 無變更，跳過" && exit 0
           git commit -m "🔄 更新美股 CSV：$CSV_FILE [skip ci]"
           git push
 
