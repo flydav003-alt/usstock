@@ -60,7 +60,7 @@ jobs:
             -H "Authorization: token ${{ secrets.TARGET_REPO_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/flydav003-alt/BT/dispatches \
-            -d '{"event_type":"us_csv_updated"}'
+            -d '{"event_type":"csv-us-updated"}'
 
       - name: Update GitHub Pages
         run: |
