@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Grok Elite Swing v5.0
+Grok Elite Swing v5.1
 美股波段選股模型 — S&P 500 + Nasdaq 100
 執行方式：python grok_elite_swing.py
 輸出：前30名 CSV（us_YYYYMMDD.csv）/ HTML 精美報告（含 Plotly K 線圖 Top10）
@@ -236,12 +236,12 @@ def download_all(all_tickers):
 
 
 # ════════════════════════════════════════════════════════════════
-# ④ 計算技術指標 & Grok Elite Score v5.0
+# ④ 計算技術指標 & Grok Elite Score v5.1
 # ════════════════════════════════════════════════════════════════
 MIN_MARKET_CAP = 10_000_000_000
 MIN_PRICE      = 10.0
 MIN_AVG_VOL    = 1_000_000
-MIN_1M_RETURN  = 0.08
+MIN_1M_RETURN  = 0.02   # v5.1：由 8% 降至 2%，讓剛突破/整理中的股票也能進入
 
 
 def _nan(v):
@@ -251,33 +251,60 @@ def _nan(v):
         return True
 
 
-def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist):
+def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist,
+                         ret_1m=float('nan'), spy_ret=float('nan')):
+    """
+    v5.1 評分邏輯改動：
+    1. CB（突破動能）：同時涵蓋「在均線上方」與「剛突破/均線附近」兩種型態
+    2. PullbackQ（回檔品質）：移除強制 above_ema20，改以 ema20_gap 判斷位置，
+                              回檔愈淺（靠近均線）反而是最佳進場位
+    3. RS（相對強度）：動態計算個股 1M 超額報酬 vs SPY，不再固定給 8 分
+    4. TC（技術共鳴）：RSI 下限從 40 放寬至 35，涵蓋整理期股票
+    5. Bonus 條件：加入 RS 門檻，避免跑輸大盤的股票拿到加分
+    """
+
+    # ── 基本數值 ──────────────────────────────────────────────
+    ema20_gap = float('nan')
+    if (not _nan(latest_close)) and (not _nan(ema20)) and float(ema20) > 0:
+        ema20_gap = (float(latest_close) - float(ema20)) / float(ema20) * 100  # 百分比
+
     pullback_pct = float('nan')
     if (not _nan(high_20)) and float(high_20) > 0:
         pullback_pct = (float(high_20) - float(latest_close)) / float(high_20) * 100
 
-    above_ema20 = (
-        (not _nan(latest_close)) and
-        (not _nan(ema20)) and
-        (float(latest_close) > float(ema20))
-    )
+    above_ema20   = (not _nan(ema20_gap)) and float(ema20_gap) >= 0
+    near_ema20    = (not _nan(ema20_gap)) and -3.0 <= float(ema20_gap) < 0   # 均線下方 3% 以內
+    breakout_zone = above_ema20 or near_ema20
 
+    # ── CB：突破動能分（最高 18）──────────────────────────────
     cb = 0
-    if above_ema20 and (not _nan(vol_ratio)) and (not _nan(pullback_pct)):
+    if (not _nan(vol_ratio)) and (not _nan(pullback_pct)):
         vr = float(vol_ratio)
         pb = float(pullback_pct)
-        if   vr >= 2.0 and pb <= 8:   cb = 18
-        elif vr >= 1.5 and pb <= 12:  cb = 12
-        elif vr >= 1.2 and pb <= 15:  cb = 8
-        elif vr >= 1.0 and pb <= 15:  cb = 4
+        if above_ema20:
+            if   vr >= 2.0 and pb <= 8:   cb = 18
+            elif vr >= 1.5 and pb <= 12:  cb = 12
+            elif vr >= 1.2 and pb <= 15:  cb = 8
+            elif vr >= 1.0 and pb <= 15:  cb = 4
+        elif near_ema20:
+            # 貼近均線 + 放量 = 醞釀突破型態
+            if   vr >= 2.0:  cb = 10
+            elif vr >= 1.5:  cb = 6
+            elif vr >= 1.2:  cb = 3
 
+    # ── PullbackQ：回檔品質分（最高 15）─────────────────────
+    # v5.1：回檔愈淺、位置愈靠近均線 = 進場時機愈好 = 分數愈高
     pq = 0
-    if above_ema20 and (not _nan(pullback_pct)):
+    if breakout_zone and (not _nan(pullback_pct)):
         pb = float(pullback_pct)
-        if   5  <= pb <= 10: pq = 15
-        elif 10 <  pb <= 15: pq = 10
-        elif pb > 15:        pq = 5
+        eg = float(ema20_gap) if not _nan(ema20_gap) else 0
+        if   pb <= 3 and eg >= -1:   pq = 15   # 幾乎在高點，均線剛突破
+        elif 3  <  pb <= 8:          pq = 13
+        elif 8  <  pb <= 12:         pq = 10
+        elif 12 <  pb <= 18:         pq = 6
+        elif pb > 18:                pq = 2
 
+    # ── VS：成交量分（最高 12）───────────────────────────────
     vs = 0
     if not _nan(vol_ratio):
         vr = float(vol_ratio)
@@ -285,14 +312,29 @@ def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hi
         elif 1.5 <= vr <= 1.99: vs = 8
         elif 1.2 <= vr <= 1.49: vs = 4
 
-    rs = 8
+    # ── RS：相對強度分（最高 12）—v5.1 改為動態，不再固定 8 ──
+    rs = 0
+    if (not _nan(ret_1m)) and (not _nan(spy_ret)):
+        excess = float(ret_1m) - float(spy_ret)
+        if   excess >= 0.08:  rs = 12
+        elif excess >= 0.04:  rs = 9
+        elif excess >= 0.01:  rs = 6
+        elif excess >= -0.02: rs = 3
+        else:                 rs = 0
+    elif not _nan(ret_1m):
+        r = float(ret_1m)
+        if   r >= 0.10: rs = 10
+        elif r >= 0.05: rs = 7
+        elif r >= 0.02: rs = 4
+        else:           rs = 1
 
+    # ── TC：技術共鳴分（最高 10）────────────────────────────
     tc = 0
     if (not _nan(rsi14)) and (not _nan(macd_hist)):
         r  = float(rsi14)
         mh = float(macd_hist)
-        rsi_main = 40 <= r <= 65
-        rsi_edge = (38 <= r < 40) or (65 < r <= 68)
+        rsi_main = 35 <= r <= 65   # v5.1：下限由 40 放寬至 35
+        rsi_edge = (32 <= r < 35) or (65 < r <= 70)
         macd_pos  = mh > 0
         macd_flat = -0.1 <= mh <= 0
         macd_near = abs(mh) < 0.05
@@ -301,10 +343,11 @@ def calc_new_elite_score(latest_close, ema20, vol_ratio, high_20, rsi14, macd_hi
         elif rsi_main and macd_flat:  tc = 6
         elif rsi_edge or macd_near:   tc = 3
 
-        if r > 70 or r < 40:
+        if r > 72 or r < 32:
             tc = 0
 
-    bonus = 5 if (cb >= 12 and pq >= 10) else 0
+    # ── Bonus：複合加分（最高 5）────────────────────────────
+    bonus = 5 if (cb >= 10 and pq >= 10 and rs >= 6) else 0
 
     new_score = min(40 + cb + pq + vs + rs + tc + bonus, 100)
     breakdown = (
@@ -320,16 +363,23 @@ def _build_reason(high_20, latest_close, ema20, ret_1m,
     if not (math.isnan(high_20) or math.isnan(latest_close)) and high_20 > 0:
         pullback = (high_20 - latest_close) / high_20 * 100
         parts.append(f'從20日高點回檔{pullback:.1f}%')
-    if not (math.isnan(latest_close) or math.isnan(ema20)):
-        if latest_close > ema20:
-            parts.append('守EMA20')
+    if not (math.isnan(latest_close) or math.isnan(ema20)) and ema20 > 0:
+        ema20_gap_pct = (latest_close - ema20) / ema20 * 100
+        if ema20_gap_pct >= 0:
+            parts.append(f'站上EMA20(+{ema20_gap_pct:.1f}%)')
+        elif ema20_gap_pct >= -3:
+            parts.append(f'貼近EMA20({ema20_gap_pct:.1f}%，整理中)')
     if not math.isnan(ret_1m):
         parts.append(f'1M報酬{ret_1m*100:.1f}%')
+    if not (math.isnan(ret_1m) or math.isnan(spy_ret)):
+        excess = (ret_1m - spy_ret) * 100
+        sign = '+' if excess >= 0 else ''
+        parts.append(f'超額報酬vs SPY:{sign}{excess:.1f}%')
     spy_str = f'SPY:{spy_ret*100:+.1f}%' if not math.isnan(spy_ret) else 'SPY:N/A'
     qqq_str = f'QQQ:{qqq_ret*100:+.1f}%' if not math.isnan(qqq_ret) else 'QQQ:N/A'
     parts.append(f'{spy_str}&{qqq_str}')
     if not math.isnan(rsi14):
-        parts.append(f'RSI{rsi14:.0f}健康')
+        parts.append(f'RSI{rsi14:.0f}')
     if not math.isnan(macd_hist):
         if macd_hist > 0:
             parts.append('MACD金叉多頭')
@@ -338,7 +388,7 @@ def _build_reason(high_20, latest_close, ema20, ret_1m,
         else:
             parts.append('MACD待確認')
     if not math.isnan(sma200) and latest_close > sma200:
-        parts.append('站上SMA200（斜率上升）')
+        parts.append('站上SMA200')
     return '；'.join(parts)
 
 
@@ -397,10 +447,19 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
         if np.isnan(avg_vol_20)   or avg_vol_20  < MIN_AVG_VOL:    return None
         if np.isnan(ret_1m)       or ret_1m       < MIN_1M_RETURN:  return None
         if np.isnan(ema20) or np.isnan(sma50):                      return None
-        if latest_close <= ema20 or latest_close <= sma50:          return None
+
+        # v5.1：放寬均線條件
+        # 原本：必須嚴格站上 EMA20 且站上 SMA50
+        # 現在：允許在 EMA20 下方 3% 以內（均線附近整理 / 剛突破前夕）
+        #       SMA50 下方 5% 以內亦可通過（較長期支撐，給更大容忍）
+        ema20_gap = (latest_close - ema20) / ema20   # 正 = 在上方，負 = 在下方
+        sma50_gap = (latest_close - sma50) / sma50
+        if ema20_gap < -0.03: return None   # 跌破 EMA20 超過 3%，排除
+        if sma50_gap < -0.05: return None   # 跌破 SMA50 超過 5%，排除
 
         new_score, new_bd, cb_s, pq_s, vs_s, rs_s, tc_s, bonus_s = calc_new_elite_score(
-            latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist
+            latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist,
+            ret_1m=ret_1m, spy_ret=spy_ret   # v5.1：傳入用於動態 RS 計算
         )
 
         if not np.isnan(ret_1d):
@@ -900,7 +959,7 @@ def generate_html_report(top30_df, pdata, today_str, macro=None):
     legend_html = '''
 <div class="sec" style="padding-top:20px">
   <div style="background:#161b22;border:1px solid #21262d;border-radius:10px;padding:20px 24px;margin-top:24px">
-    <div style="font-weight:800;color:#E5E5EA;margin-bottom:13px;font-size:1.02em">📐 細化 Grok Elite Score v5.0 評分說明</div>
+    <div style="font-weight:800;color:#E5E5EA;margin-bottom:13px;font-size:1.02em">📐 細化 Grok Elite Score v5.1 評分說明</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;font-size:.81em;color:#8b949e">
       <div>✅ 通過硬濾鏡 → <span style="color:#E5E5EA">基底 40 分</span></div>
       <div>📦 Consolidation Breakout → <span style="color:#FFD60A">最高 +18 分</span></div>
@@ -993,7 +1052,7 @@ tr:hover td{background:rgba(56,139,253,.04)}
         '<div class="header">\n'
         '  <div class="hi">\n'
         '    <div class="brand">Grok Elite Swing &nbsp;\u00b7&nbsp; \u6a5f\u5bc6\u5831\u544a</div>\n'
-        '    <h1 class="htitle">Grok Elite Swing v5.0 \u2014 <span>' + date_fmt + '</span> \u6536\u76e4\u5f8c\u5206\u6790</h1>\n'
+        '    <h1 class="htitle">Grok Elite Swing v5.1 \u2014 <span>' + date_fmt + '</span> \u6536\u76e4\u5f8c\u5206\u6790</h1>\n'
         '    <div class="hmeta">\n'
         '      <span>\ud83d\udce1 S&amp;P 500 + Nasdaq 100</span>\n'
         '      <span>\u23f1 7-14 \u5929\u6ce2\u6bb5\u7b56\u7565</span>\n'
@@ -1055,7 +1114,7 @@ tr:hover td{background:rgba(56,139,253,.04)}
         + charts + '\n'
         '</div>\n'
         + legend_html + '\n'
-        '<div class="footer">Grok Elite Swing Model v5.0 &nbsp;\u00b7&nbsp; ' + date_fmt + ' &nbsp;\u00b7&nbsp; \u8cc7\u6599\u4f86\u6e90\uff1ayfinance / Wikipedia &nbsp;\u00b7&nbsp; \u50c5\u4f9b\u5167\u90e8\u53c3\u8003\uff0c\u4e0d\u69cb\u6210\u6295\u8cc7\u5efa\u8b70</div>\n'
+        '<div class="footer">Grok Elite Swing Model v5.1 &nbsp;\u00b7&nbsp; ' + date_fmt + ' &nbsp;\u00b7&nbsp; \u8cc7\u6599\u4f86\u6e90\uff1ayfinance / Wikipedia &nbsp;\u00b7&nbsp; \u50c5\u4f9b\u5167\u90e8\u53c3\u8003\uff0c\u4e0d\u69cb\u6210\u6295\u8cc7\u5efa\u8b70</div>\n'
         '</body></html>'
     )
     return html
