@@ -446,7 +446,7 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
 
         high_20 = float(df['High'].iloc[-20:].max()) if len(df) >= 20 else float('nan')
 
-        # 預設給予 150 億美元 (15B)，確保在 Yahoo API 限流或阻擋時，個股能順利通過初始硬濾鏡
+# 🚀 市值限流免死金牌：預設直接給予 150 億美元（15B），因為能進股票池的本来就是大盤頂尖成分股
         market_cap   = 15_000_000_000 
         company_name = ticker
         try:
