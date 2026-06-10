@@ -174,6 +174,34 @@ PERIOD     = '1y'
 INTERVAL   = '1d'
 
 
+def _normalize_df(df):
+    """
+    將 yfinance 回傳的 DataFrame 正規化為單層欄位（Open/High/Low/Close/Volume）。
+    處理兩種常見結構：
+      1. MultiIndex columns: (Price, Ticker)  → 取第 0 level
+      2. MultiIndex columns: (Ticker, Price)  → 取第 1 level
+      3. 單層欄位但欄名含空白                  → strip
+    """
+    if df is None or df.empty:
+        return df
+    df = df.copy()
+    if isinstance(df.columns, pd.MultiIndex):
+        # 判斷哪個 level 是 OHLCV 名稱
+        ohlcv = {'Open', 'High', 'Low', 'Close', 'Volume',
+                 'open', 'high', 'low', 'close', 'volume'}
+        lvl0_vals = set(str(v) for v in df.columns.get_level_values(0))
+        lvl1_vals = set(str(v) for v in df.columns.get_level_values(1))
+        if lvl0_vals & ohlcv:
+            df.columns = df.columns.get_level_values(0)
+        elif lvl1_vals & ohlcv:
+            df.columns = df.columns.get_level_values(1)
+        else:
+            # fallback：取第 0 level
+            df.columns = df.columns.get_level_values(0)
+    df.columns = [str(c).strip() for c in df.columns]
+    return df
+
+
 def download_batch(tickers, period=PERIOD, interval=INTERVAL):
     result = {}
     try:
@@ -186,16 +214,27 @@ def download_batch(tickers, period=PERIOD, interval=INTERVAL):
             progress    = False,
             threads     = True
         )
+
+        # ── 結構診斷（首批執行一次，幫助偵錯） ──
+        if getattr(download_batch, '_debug_printed', False) is False:
+            download_batch._debug_printed = True
+            col_type = type(raw.columns).__name__
+            col_sample = list(raw.columns[:6]) if len(raw.columns) >= 6 else list(raw.columns)
+            print(f'  [診斷] yfinance DataFrame 欄位類型：{col_type}')
+            print(f'  [診斷] 欄位樣本：{col_sample}')
+
         if len(tickers) == 1:
             t = tickers[0]
             if not raw.empty:
-                result[t] = raw
+                result[t] = _normalize_df(raw)
         else:
             for t in tickers:
                 try:
-                    df = raw[t].dropna(how='all')
-                    if len(df) >= 60:
-                        result[t] = df
+                    sub = raw[t]
+                    sub = _normalize_df(sub)
+                    sub = sub.dropna(how='all')
+                    if len(sub) >= 60 and 'Close' in sub.columns:
+                        result[t] = sub
                 except Exception:
                     pass
     except Exception as e:
@@ -209,35 +248,43 @@ def download_all(all_tickers):
     spy_ret_1m = float('nan')
     qqq_ret_1m = float('nan')
 
-    def _safe_close(df):
-        """從可能有 MultiIndex 欄位的 DataFrame 取出 Close Series"""
+    def _get_close(df, label):
+        """取出正規化後的 Close Series，並印出診斷資訊"""
         if df is None or df.empty:
+            print(f'  ⚠️  {label} 資料為空')
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.copy()
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [str(c).strip() for c in df.columns]
-        return df['Close'] if 'Close' in df.columns else None
+        df_n = _normalize_df(df)
+        cols = list(df_n.columns)
+        print(f'  [診斷] {label} 欄位：{cols}，筆數：{len(df_n)}')
+        if 'Close' not in df_n.columns:
+            print(f'  ⚠️  {label} 找不到 Close 欄位，現有欄位：{cols}')
+            return None
+        cl = df_n['Close'].dropna()
+        if cl.empty:
+            print(f'  ⚠️  {label} Close 全為 nan')
+            return None
+        print(f'  [診斷] {label} 最新收盤：{cl.iloc[-1]:.2f}，資料日期：{cl.index[-1].date()}')
+        return cl
 
-    if 'SPY' in benchmark_data and len(benchmark_data['SPY']) >= 22:
-        spy_close = _safe_close(benchmark_data['SPY'])
-        if spy_close is not None and len(spy_close.dropna()) >= 22:
+    if 'SPY' in benchmark_data:
+        spy_close = _get_close(benchmark_data['SPY'], 'SPY')
+        if spy_close is not None and len(spy_close) >= 22:
             spy_ret_1m = (spy_close.iloc[-1] - spy_close.iloc[-22]) / spy_close.iloc[-22]
             print(f'  SPY 近 1 個月報酬：{spy_ret_1m:.2%}')
         else:
-            print('  ⚠️  SPY Close 欄位解析失敗，spy_ret_1m 設為 nan')
+            print('  ⚠️  SPY 資料不足 22 筆，spy_ret_1m 設為 nan')
     else:
-        print('  ⚠️  SPY 資料不足，spy_ret_1m 設為 nan')
+        print('  ⚠️  SPY 下載失敗，spy_ret_1m 設為 nan')
 
-    if 'QQQ' in benchmark_data and len(benchmark_data['QQQ']) >= 22:
-        qqq_close = _safe_close(benchmark_data['QQQ'])
-        if qqq_close is not None and len(qqq_close.dropna()) >= 22:
+    if 'QQQ' in benchmark_data:
+        qqq_close = _get_close(benchmark_data['QQQ'], 'QQQ')
+        if qqq_close is not None and len(qqq_close) >= 22:
             qqq_ret_1m = (qqq_close.iloc[-1] - qqq_close.iloc[-22]) / qqq_close.iloc[-22]
             print(f'  QQQ 近 1 個月報酬：{qqq_ret_1m:.2%}')
         else:
-            print('  ⚠️  QQQ Close 欄位解析失敗，qqq_ret_1m 設為 nan')
+            print('  ⚠️  QQQ 資料不足 22 筆，qqq_ret_1m 設為 nan')
     else:
-        print('  ⚠️  QQQ 資料不足，qqq_ret_1m 設為 nan')
+        print('  ⚠️  QQQ 下載失敗，qqq_ret_1m 設為 nan')
 
     print(f'\n📥 開始分批下載 {len(all_tickers)} 檔股票（每批 {BATCH_SIZE} 檔）...')
     price_data = {}
@@ -428,10 +475,7 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret, _filter_counts=None)
         if df is None or len(df) < 60:
             return _knock('data_short')
 
-        df = df.copy()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [str(c).strip() for c in df.columns]
+        df = _normalize_df(df)
 
         close  = df['Close']
         volume = df['Volume']
@@ -466,6 +510,13 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret, _filter_counts=None)
         # ── 先跑不需要 API 的硬濾鏡，失敗即早退 ─────────────────
         # （這樣 API 失效時不用對每檔都等待 .info 逾時）
         if np.isnan(latest_close) or latest_close < MIN_PRICE:
+            # 首次觸發時印出診斷資訊，確認取到的值是否合理
+            if _filter_counts is not None and _filter_counts.get('price', 0) == 0:
+                cols = list(df.columns)
+                print(f'  [診斷] 股價濾鏡首次觸發 | ticker={ticker}')
+                print(f'         df 欄位：{cols}')
+                print(f'         latest_close={latest_close:.4f}，latest_vol={latest_vol:.0f}')
+                print(f'         Close 最後 3 筆：{list(close.iloc[-3:].round(4))}')
             return _knock('price')
         if np.isnan(avg_vol_20) or avg_vol_20 < MIN_AVG_VOL:
             return _knock('vol')
