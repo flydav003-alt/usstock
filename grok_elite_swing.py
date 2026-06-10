@@ -232,6 +232,9 @@ def download_batch(tickers, period=PERIOD, interval=INTERVAL):
                 try:
                     sub = raw[t]
                     sub = _normalize_df(sub)
+                    # 移除末尾 Close=nan 的不完整當日 bar
+                    if 'Close' in sub.columns:
+                        sub = sub[sub['Close'].notna()]
                     sub = sub.dropna(how='all')
                     if len(sub) >= 60 and 'Close' in sub.columns:
                         result[t] = sub
@@ -249,20 +252,21 @@ def download_all(all_tickers):
     qqq_ret_1m = float('nan')
 
     def _get_close(df, label):
-        """取出正規化後的 Close Series，並印出診斷資訊"""
+        """取出正規化後的 Close Series，移除末尾 nan，並印出診斷資訊"""
         if df is None or df.empty:
             print(f'  ⚠️  {label} 資料為空')
             return None
         df_n = _normalize_df(df)
         cols = list(df_n.columns)
-        print(f'  [診斷] {label} 欄位：{cols}，筆數：{len(df_n)}')
         if 'Close' not in df_n.columns:
             print(f'  ⚠️  {label} 找不到 Close 欄位，現有欄位：{cols}')
             return None
+        # 移除末尾不完整的當日 bar
         cl = df_n['Close'].dropna()
         if cl.empty:
             print(f'  ⚠️  {label} Close 全為 nan')
             return None
+        print(f'  [診斷] {label} 欄位：{cols}，完整筆數：{len(cl)}')
         print(f'  [診斷] {label} 最新收盤：{cl.iloc[-1]:.2f}，資料日期：{cl.index[-1].date()}')
         return cl
 
@@ -476,6 +480,15 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret, _filter_counts=None)
             return _knock('data_short')
 
         df = _normalize_df(df)
+
+        # ── 移除末尾不完整的當日 bar（今日盤中 / 尚未收盤 → Close = nan）──
+        # yfinance 在市場尚未收盤或剛收盤時會在最後一列插入含 nan 的當日資料，
+        # 導致 iloc[-1] 取到 nan，造成「股價 < $10」大量誤殺。
+        # 只要 Close 是 nan 就丟掉，確保 iloc[-1] 永遠是最新完整收盤價。
+        df = df[df['Close'].notna()].copy()
+
+        if len(df) < 60:
+            return _knock('data_short')
 
         close  = df['Close']
         volume = df['Volume']
