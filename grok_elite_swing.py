@@ -412,10 +412,21 @@ def _build_reason(high_20, latest_close, ema20, ret_1m,
     return '；'.join(parts)
 
 
-def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
+def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret, _filter_counts=None):
+    """
+    _filter_counts：dict，由 run_scoring 傳入，用於統計各濾鏡淘汰數。
+    格式：{'exception': 0, 'price': 0, 'vol': 0, 'ret_1m': 0,
+           'ma_nan': 0, 'ema20': 0, 'sma50': 0,
+           'mcap_small': 0, 'mcap_api_ok': 0, 'mcap_api_nan': 0}
+    """
+    def _knock(key):
+        if _filter_counts is not None:
+            _filter_counts[key] = _filter_counts.get(key, 0) + 1
+        return None
+
     try:
         if df is None or len(df) < 60:
-            return None
+            return _knock('data_short')
 
         df = df.copy()
         if isinstance(df.columns, pd.MultiIndex):
@@ -452,10 +463,30 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
 
         high_20 = float(df['High'].iloc[-20:].max()) if len(df) >= 20 else float('nan')
 
-        # ── 市值 & 公司名稱查詢（三層容錯）────────────────────────
+        # ── 先跑不需要 API 的硬濾鏡，失敗即早退 ─────────────────
+        # （這樣 API 失效時不用對每檔都等待 .info 逾時）
+        if np.isnan(latest_close) or latest_close < MIN_PRICE:
+            return _knock('price')
+        if np.isnan(avg_vol_20) or avg_vol_20 < MIN_AVG_VOL:
+            return _knock('vol')
+        if np.isnan(ret_1m) or ret_1m < MIN_1M_RETURN:
+            return _knock('ret_1m')
+        if np.isnan(ema20) or np.isnan(sma50):
+            return _knock('ma_nan')
+
+        # v5.1：放寬均線條件
+        ema20_gap = (latest_close - ema20) / ema20
+        sma50_gap = (latest_close - sma50) / sma50
+        if ema20_gap < -0.03:
+            return _knock('ema20')
+        if sma50_gap < -0.05:
+            return _knock('sma50')
+
+        # ── 市值 & 公司名稱查詢（三層容錯）──────────────────────
+        # 只對通過技術濾鏡的股票才呼叫 API，大幅減少無效請求
         market_cap        = float('nan')
         company_name      = ticker
-        mcap_fetch_status = 'not_attempted'  # 用於診斷報告
+        mcap_fetch_status = 'not_attempted'
 
         try:
             t_obj = yf.Ticker(ticker)
@@ -478,7 +509,6 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
                     if mc2 and float(mc2) > 0:
                         market_cap        = float(mc2)
                         mcap_fetch_status = 'info_dict_ok'
-                    # 順便取公司名稱
                     raw_name     = info_dict.get('shortName') or info_dict.get('longName') or ticker
                     company_name = _clean_str(str(raw_name))
                     if mcap_fetch_status.startswith('fast_info'):
@@ -489,42 +519,29 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
                     else:
                         mcap_fetch_status = f'both_err:{type(_e2).__name__}'
             else:
-                # fast_info 成功，但名稱仍需從 .info 取
                 try:
                     info_dict    = t_obj.info
                     raw_name     = info_dict.get('shortName') or info_dict.get('longName') or ticker
                     company_name = _clean_str(str(raw_name))
                 except Exception:
-                    pass  # 名稱取不到無礙主流程
+                    pass
 
         except Exception as _e_outer:
             mcap_fetch_status = f'ticker_obj_err:{type(_e_outer).__name__}'
 
-        # ── 硬濾鏡（市值改為「有值才篩，無值視為通過」）─────────
-        # 注意：S&P500 / NDX100 本身就是大型股股票池，
-        # 若 API 當機導致全批 nan 不應連帶淘汰所有股票。
-        # 只有「明確抓到市值且確實低於門檻」才淘汰。
+        # ── 市值濾鏡（有值才篩，無值視為通過）───────────────────
         mcap_filter_result = 'skipped(api_unavailable)'
         if not np.isnan(market_cap):
             if market_cap < MIN_MARKET_CAP:
-                return None   # 有值 + 確實太小 → 淘汰
+                _knock('mcap_small')
+                return None
             else:
                 mcap_filter_result = f'pass(${market_cap/1e9:.1f}B)'
-        # market_cap 是 nan → 繼續，欄位留 nan，報表顯示「—」
-
-        if np.isnan(latest_close) or latest_close < MIN_PRICE:     return None
-        if np.isnan(avg_vol_20)   or avg_vol_20  < MIN_AVG_VOL:    return None
-        if np.isnan(ret_1m)       or ret_1m       < MIN_1M_RETURN:  return None
-        if np.isnan(ema20) or np.isnan(sma50):                      return None
-
-        # v5.1：放寬均線條件
-        # 原本：必須嚴格站上 EMA20 且站上 SMA50
-        # 現在：允許在 EMA20 下方 3% 以內（均線附近整理 / 剛突破前夕）
-        #       SMA50 下方 5% 以內亦可通過（較長期支撐，給更大容忍）
-        ema20_gap = (latest_close - ema20) / ema20   # 正 = 在上方，負 = 在下方
-        sma50_gap = (latest_close - sma50) / sma50
-        if ema20_gap < -0.03: return None   # 跌破 EMA20 超過 3%，排除
-        if sma50_gap < -0.05: return None   # 跌破 SMA50 超過 5%，排除
+                if _filter_counts is not None:
+                    _filter_counts['mcap_api_ok'] = _filter_counts.get('mcap_api_ok', 0) + 1
+        else:
+            if _filter_counts is not None:
+                _filter_counts['mcap_api_nan'] = _filter_counts.get('mcap_api_nan', 0) + 1
 
         new_score, new_bd, cb_s, pq_s, vs_s, rs_s, tc_s, bonus_s = calc_new_elite_score(
             latest_close, ema20, vol_ratio, high_20, rsi14, macd_hist,
@@ -571,7 +588,9 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
             'X_Catalyst_Reason'    : '待 Grok 評分',
         }
 
-    except Exception:
+    except Exception as _ex:
+        if _filter_counts is not None:
+            _filter_counts['exception'] = _filter_counts.get('exception', 0) + 1
         return None
 
 
@@ -579,21 +598,28 @@ def run_scoring(price_data, spy_ret_1m, qqq_ret_1m):
     print(f'🔢 開始計算 {len(price_data)} 檔股票的 New_Grok_Elite_Score...')
     print('（此步驟需要查詢各股票市值，約需 3-8 分鐘，請耐心等候）\n')
 
-    records  = []
-    skipped  = 0
-    total    = len(price_data)
-    mcap_ok  = 0   # 成功抓到市值（fast_info 或 info dict）
-    mcap_nan = 0   # API 全數回 nan，容忍通過
+    records        = []
+    skipped        = 0
+    total          = len(price_data)
+    filter_counts  = {
+        'exception' : 0,
+        'data_short': 0,
+        'price'     : 0,
+        'vol'       : 0,
+        'ret_1m'    : 0,
+        'ma_nan'    : 0,
+        'ema20'     : 0,
+        'sma50'     : 0,
+        'mcap_small': 0,
+        'mcap_api_ok' : 0,
+        'mcap_api_nan': 0,
+    }
 
     for i, (ticker, df) in enumerate(price_data.items()):
-        result = calc_indicators_and_score(ticker, df, spy_ret_1m, qqq_ret_1m)
+        result = calc_indicators_and_score(ticker, df, spy_ret_1m, qqq_ret_1m,
+                                           _filter_counts=filter_counts)
         if result:
             records.append(result)
-            fs = result.get('McapFetchStatus', '')
-            if 'ok' in fs:
-                mcap_ok  += 1
-            else:
-                mcap_nan += 1
         else:
             skipped += 1
 
@@ -603,34 +629,65 @@ def run_scoring(price_data, spy_ret_1m, qqq_ret_1m):
 
     print(f'\n✅ 評分完成！通過硬濾鏡：{len(records)} 檔，淘汰：{skipped} 檔')
 
-    # ── 市值 API 健康報告 ─────────────────────────────────────────
+    # ── 濾鏡淘汰明細 ─────────────────────────────────────────────
     print('\n' + '─' * 60)
-    print('📡 市值 API 健康報告')
+    print('🔍 硬濾鏡淘汰明細')
     print('─' * 60)
-    if records:
-        ok_pct  = mcap_ok  / len(records) * 100
-        nan_pct = mcap_nan / len(records) * 100
-        print(f'  通過篩選的 {len(records)} 檔中：')
-        print(f'    ✅ 市值成功抓取：{mcap_ok} 檔（{ok_pct:.0f}%）')
-        print(f'    ⚠️  市值 nan（容忍通過）：{mcap_nan} 檔（{nan_pct:.0f}%）')
-        nan_ratio = mcap_nan / len(records)
+    label_map = {
+        'exception' : '程式異常（exception）',
+        'data_short': '歷史資料不足 60 筆',
+        'price'     : f'股價 < ${MIN_PRICE}',
+        'vol'       : f'日均量 < {MIN_AVG_VOL:,}',
+        'ret_1m'    : f'1M 報酬 < {MIN_1M_RETURN:.0%}',
+        'ma_nan'    : 'EMA20 / SMA50 計算失敗（nan）',
+        'ema20'     : 'EMA20 跌破 > 3%',
+        'sma50'     : 'SMA50 跌破 > 5%',
+        'mcap_small': f'市值 < ${MIN_MARKET_CAP/1e9:.0f}B（有確認值）',
+    }
+    total_knocked = sum(v for k, v in filter_counts.items()
+                        if k not in ('mcap_api_ok', 'mcap_api_nan'))
+    for key, label in label_map.items():
+        n = filter_counts.get(key, 0)
+        if n > 0:
+            bar = '█' * min(n // 5, 30)
+            print(f'  {label:<35} {n:4d} 檔  {bar}')
+    print(f'  {"─"*50}')
+    print(f'  合計淘汰：{total_knocked} 檔（通過：{len(records)} 檔）')
+
+    # ── 市值 API 健康報告 ─────────────────────────────────────────
+    mcap_ok  = filter_counts.get('mcap_api_ok', 0)
+    mcap_nan = filter_counts.get('mcap_api_nan', 0)
+    mcap_total = mcap_ok + mcap_nan
+    print('\n' + '─' * 60)
+    print('📡 市值 API 健康報告（僅統計通過技術濾鏡後的股票）')
+    print('─' * 60)
+    if mcap_total > 0:
+        nan_ratio = mcap_nan / mcap_total
+        print(f'  ✅ 成功抓取市值：{mcap_ok} 檔')
+        print(f'  ⚠️  市值 nan（API 無回應）：{mcap_nan} 檔（{nan_ratio*100:.0f}%）→ 容忍通過')
     else:
-        nan_ratio = 1.0
+        nan_ratio = 0.0
+        print('  ℹ️  無股票通過技術濾鏡，市值 API 未被呼叫。')
 
     print()
-    if nan_ratio >= 0.9:
-        print('  🚨 診斷結論：Yahoo Finance API 今日大規模失效')
-        print(f'     市值 nan 比例 ≥ 90%（{nan_ratio*100:.0f}%）')
-        print('     fast_info.market_cap 與 .info["marketCap"] 均回傳 None / nan。')
-        print('     這是 yfinance 已知的 Yahoo Finance 後端 API 格式異動問題，')
-        print('     非程式碼 bug，通常 1～2 個交易日後自動恢復。')
-        print('     ➜ 本次改為「有值才篩、無值容忍通過」，評分結果仍然有效。')
-        print('     ➜ 報表中 Market_Cap_B 欄位顯示為 nan，屬正常現象。')
-    elif nan_ratio >= 0.3:
-        print(f'  ⚠️  診斷結論：Yahoo Finance API 部分異常（nan 率 {nan_ratio*100:.0f}%）')
-        print('     部分股票市值無法取得，已以容忍模式繼續評分。')
-    else:
-        print(f'  ✅ 診斷結論：Yahoo Finance API 運作正常（nan 率 {nan_ratio*100:.0f}%）')
+    if filter_counts.get('ret_1m', 0) > 400:
+        print('  🚨 診斷結論：1M 報酬濾鏡淘汰大量股票')
+        print(f'     {filter_counts["ret_1m"]} 檔因 1M 報酬 < {MIN_1M_RETURN:.0%} 被淘汰。')
+        print('     今日市場整體走弱，或 yfinance batch 下載的收盤價欄位解析有誤。')
+        print('     ➜ 建議抽查：個別 yf.Ticker("AAPL").history(period="1mo") 是否正常。')
+    elif nan_ratio >= 0.9 and mcap_total > 0:
+        print('  🚨 診斷結論：Yahoo Finance API 今日大規模失效（市值全 nan）')
+        print('     ➜ 本次已用容忍模式通過，評分結果仍有效。')
+        print('     ➜ 通常 1-2 個交易日後自動恢復。')
+    elif nan_ratio >= 0.3 and mcap_total > 0:
+        print(f'  ⚠️  診斷結論：市值 API 部分異常（nan 率 {nan_ratio*100:.0f}%）')
+    elif mcap_total > 0:
+        print(f'  ✅ 診斷結論：市值 API 運作正常（nan 率 {nan_ratio*100:.0f}%）')
+
+    if filter_counts.get('exception', 0) > 20:
+        print(f'\n  ⚠️  {filter_counts["exception"]} 檔出現程式異常（exception），')
+        print('     可能是 yfinance DataFrame 欄位結構改變，建議升級版本：')
+        print('     pip install --upgrade yfinance')
     print('─' * 60)
 
     return records
