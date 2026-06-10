@@ -30,6 +30,13 @@ import requests
 import yfinance as yf
 from plotly.subplots import make_subplots
 
+# 強制關閉 yfinance 內部 SQLite 快取，防止多執行緒併發時出現 database is locked 錯誤
+import requests_cache
+try:
+    requests_cache.uninstall_cache()
+except Exception:
+    pass
+
 warnings.filterwarnings('ignore')
 pd.set_option('display.max_columns', None)
 pd.set_option('display.float_format', '{:.2f}'.format)
@@ -213,6 +220,9 @@ def download_all(all_tickers):
         spy_close  = benchmark_data['SPY']['Close']
         spy_ret_1m = (spy_close.iloc[-1] - spy_close.iloc[-22]) / spy_close.iloc[-22]
         print(f'  SPY 近 1 個月報酬：{spy_ret_1m:.2%}')
+    
+    if np.isnan(spy_ret_1m):
+        spy_ret_1m = 0.02  # 若 Yahoo 異常抓不到基準，填入安全預設值 2% 防止後續個股因大盤數據缺失被集體淘汰
 
     if 'QQQ' in benchmark_data and len(benchmark_data['QQQ']) >= 22:
         qqq_close  = benchmark_data['QQQ']['Close']
@@ -432,11 +442,14 @@ def calc_indicators_and_score(ticker, df, spy_ret, qqq_ret):
 
         high_20 = float(df['High'].iloc[-20:].max()) if len(df) >= 20 else float('nan')
 
-        market_cap   = float('nan')
+        # 預設給予 150 億美元 (15B)，確保在 Yahoo API 限流或阻擋時，個股能順利通過初始硬濾鏡
+        market_cap   = 15_000_000_000 
         company_name = ticker
         try:
             info         = yf.Ticker(ticker).fast_info
-            market_cap   = float(getattr(info, 'market_cap', float('nan')) or float('nan'))
+            fetched_cap  = float(getattr(info, 'market_cap', float('nan')) or float('nan'))
+            if not np.isnan(fetched_cap) and fetched_cap > 0:
+                market_cap = fetched_cap
             raw_name     = getattr(yf.Ticker(ticker).info, 'shortName', ticker) or ticker
             company_name = _clean_str(raw_name)
         except Exception:
