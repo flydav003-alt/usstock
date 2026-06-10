@@ -229,6 +229,10 @@ def download_all(all_tickers):
         qqq_ret_1m = (qqq_close.iloc[-1] - qqq_close.iloc[-22]) / qqq_close.iloc[-22]
         print(f'  QQQ 近 1 個月報酬：{qqq_ret_1m:.2%}')
 
+    # 🚀 核心防卡死安全網：若大盤基準被鎖定變 nan，自動帶入安全備用值，防止後面個股全軍覆沒
+    if np.isnan(spy_ret_1m): spy_ret_1m = 0.02
+    if np.isnan(qqq_ret_1m): qqq_ret_1m = 0.02
+
     print(f'\n📥 開始分批下載 {len(all_tickers)} 檔股票（每批 {BATCH_SIZE} 檔）...')
     price_data = {}
     batches    = [all_tickers[i:i+BATCH_SIZE] for i in range(0, len(all_tickers), BATCH_SIZE)]
